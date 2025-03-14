@@ -41,7 +41,7 @@ impl SigUrlExt for &str {
 pub mod config {
     /// Configuration parameters for [Tx5TransportFactory](super::Tx5TransportFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct Tx5TransportConfig {
         /// Allow connecting to plaintext (ws) signal server
         /// instead of the default requiring TLS (wss).

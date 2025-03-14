@@ -62,7 +62,7 @@ pub const PUBLISH_MOD_NAME: &str = "Publish";
 mod config {
     /// Configuration parameters for [CorePublishFactory](super::CorePublishFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct CorePublishConfig {}
 
     /// Module-level configuration for CorePublish.

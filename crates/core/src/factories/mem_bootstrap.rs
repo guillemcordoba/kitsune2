@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 mod config {
     /// Configuration parameters for [MemBootstrapFactory](super::MemBootstrapFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct MemBootstrapConfig {
         /// Since rust test runs multiple tests in the same process,
         /// we cannot just have a single global bootstrap test store.

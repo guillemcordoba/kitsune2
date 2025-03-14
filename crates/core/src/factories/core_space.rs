@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 mod config {
     /// Configuration parameters for [CoreSpaceFactory](super::CoreSpaceFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct CoreSpaceConfig {
         /// The interval in millis at which we check for about to expire
         /// local agent infos.

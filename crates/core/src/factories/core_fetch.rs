@@ -24,7 +24,7 @@ pub const MOD_NAME: &str = "Fetch";
 mod config {
     /// Configuration parameters for [CoreFetchFactory](super::CoreFetchFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct CoreFetchConfig {
         /// How many parallel op fetch requests can be made at once. Default: 2.
         pub parallel_request_count: u8,

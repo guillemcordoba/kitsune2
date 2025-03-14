@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub mod config {
     /// Configuration parameters for [CoreBootstrapFactory](super::CoreBootstrapFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct CoreBootstrapConfig {
         /// The url of the kitsune2 bootstrap server. E.g. `https://boot.kitsu.ne`.
         pub server_url: String,

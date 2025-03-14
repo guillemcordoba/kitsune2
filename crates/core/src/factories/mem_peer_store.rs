@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 mod config {
     /// Configuration parameters for [MemPeerStoreFactory](super::MemPeerStoreFactory).
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct MemPeerStoreConfig {
         /// The interval in seconds at which expired infos will be pruned.
         /// Default: 10s.

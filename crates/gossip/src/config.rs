@@ -4,7 +4,7 @@
 ///
 /// This will be set as a default by the [K2GossipFactory](crate::K2GossipFactory).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct K2GossipConfig {
     /// The maximum number of bytes of op data to request in a single gossip round.
     ///
