@@ -25,16 +25,18 @@
 
           bootstrap-srv = craneLib.buildPackage {
             pname = "bootstrap-srv";
-            cargoExtraArgs = "-p kitsune2_bootstrap_srv";
-            src = craneLib.cleanCargoSource ./.;
+            # cargoExtraArgs = "-p kitsune2_bootstrap_srv";
+            src = ./.;
             nativeBuildInputs = [
               pkgs.perl
               pkgs.cmake
+              pkgs.clang
             ];
             buildInputs = [
               pkgs.openssl
             ] ++ (pkgs.lib.optional (system == "x86_64-darwin") pkgs.apple-sdk_10_15);
             doCheck = false;
+            LIBCLANG_PATH="${pkgs.llvmPackages_18.libclang.lib}/lib";
           };
         in
         {
