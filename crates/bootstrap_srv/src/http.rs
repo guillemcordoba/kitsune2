@@ -23,6 +23,9 @@ impl HttpResponse {
 pub type HttpRespondCb = Box<dyn FnOnce(HttpResponse) + 'static + Send>;
 
 pub enum HttpRequest {
+    AuthenticatePut {
+        token: String,
+    },
     HealthGet,
     BootstrapGet {
         space: bytes::Bytes,
@@ -127,6 +130,7 @@ struct Ready {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub config: Arc<Config>,
     pub h_send: HSend,
     pub sbd_state: Option<crate::sbd::SbdState>,
 }
@@ -173,6 +177,7 @@ fn tokio_thread(
             };
 
             let app = Router::<AppState>::new()
+                .route("/authenticate", routing::put(handle_authenticate_put))
                 .route("/health", routing::get(handle_health_get))
                 .route("/bootstrap/:space", routing::get(handle_boot_get))
                 .route(
@@ -189,6 +194,7 @@ fn tokio_thread(
             let app: Router = app
                 .layer(extract::DefaultBodyLimit::max(1024))
                 .with_state(AppState {
+                    config: config.clone(),
                     h_send: h_send.clone(),
                     sbd_state: if !config.no_sbd {
                         Some(crate::sbd::SbdState {
@@ -319,6 +325,46 @@ async fn handle_dispatch(
         }
         .respond()
     })
+}
+
+async fn handle_authenticate_put(
+    extract::State(state): extract::State<AppState>,
+    body: bytes::Bytes,
+) -> response::Response {
+    let token = if let Some(url) = &state.config.authentication_hook_server {
+        let url = url.clone();
+        tokio::task::spawn_blocking(move || {
+            ureq::put(&url)
+                .set("Content-Type", "application/octet-stream")
+                .send(&body[..])
+                .map_err(std::io::Error::other)?
+                .into_string()
+        })
+        .await
+    } else {
+        // If no backend configured, fallback to gen random token:
+        use base64::prelude::*;
+        use rand::Rng;
+
+        let mut bytes = [0; 32];
+        rand::thread_rng().fill(&mut bytes);
+        Ok(Ok(BASE64_URL_SAFE_NO_PAD.encode(&bytes[..])))
+    };
+
+    match token {
+        Ok(Ok(token)) => {
+            handle_dispatch(
+                &state.h_send,
+                HttpRequest::AuthenticatePut { token },
+            )
+            .await
+        }
+        Err(_) | Ok(Err(_)) => HttpResponse {
+            status: 401,
+            body: b"Unauthorized".to_vec(),
+        }
+        .respond(),
+    }
 }
 
 async fn handle_health_get(

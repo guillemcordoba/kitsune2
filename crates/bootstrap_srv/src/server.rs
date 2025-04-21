@@ -221,12 +221,23 @@ impl Handler<'_> {
         req: HttpRequest,
     ) -> std::io::Result<(u16, Vec<u8>)> {
         match req {
+            HttpRequest::AuthenticatePut { token } => {
+                self.handle_authenticate_put(token)
+            }
             HttpRequest::HealthGet => Ok((200, b"{}".to_vec())),
             HttpRequest::BootstrapGet { space } => self.handle_boot_get(space),
             HttpRequest::BootstrapPut { space, agent, body } => {
                 self.handle_boot_put(space, agent, body)
             }
         }
+    }
+
+    /// Respond to a request for authentication token.
+    fn handle_authenticate_put(
+        &mut self,
+        _token: String,
+    ) -> std::io::Result<(u16, Vec<u8>)> {
+        todo!("add token to valid auth header list")
     }
 
     /// Respond to a request for the agent infos within a space.

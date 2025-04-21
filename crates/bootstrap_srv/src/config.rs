@@ -79,6 +79,10 @@ pub struct Config {
 
     /// The SBD server configuration.
     pub sbd: sbd_server::Config,
+
+    /// The authentication "Hook Server" as defined by
+    /// https://github.com/holochain/sbd/blob/main/spec-auth.md
+    pub authentication_hook_server: Option<String>,
 }
 
 impl Config {
@@ -94,6 +98,7 @@ impl Config {
             tls_key: None,
             no_sbd: false,
             sbd: sbd_server::Config::default(),
+            authentication_hook_server: None,
         }
     }
 
@@ -112,6 +117,7 @@ impl Config {
             tls_key: None,
             no_sbd: false,
             sbd: sbd_server::Config::default(),
+            authentication_hook_server: None,
         }
     }
 }
