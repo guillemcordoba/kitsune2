@@ -239,6 +239,12 @@ impl ServerCertVerifier for NoVerify {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthToken {
+    pub auth_token: String,
+}
+
 #[test]
 fn happy_bootstrap_put_get() {
     let s = BootstrapSrv::new(Config::testing()).unwrap();
@@ -250,9 +256,25 @@ fn happy_bootstrap_put_get() {
     .call()
     .unwrap();
 
+    let addr = format!("http://{:?}/authenticate", s.listen_addrs()[0]);
+    println!("{addr}");
+    let res = ureq::put(&addr)
+        .send(&[][..])
+        .unwrap()
+        .into_string()
+        .unwrap();
+    let token: AuthToken = serde_json::from_str(&res).unwrap();
+    let token = token.auth_token;
+    println!("token: {token:?}");
+
     let addr = format!("http://{:?}/bootstrap/{}", s.listen_addrs()[0], S1);
     println!("{addr}");
-    let res = ureq::get(&addr).call().unwrap().into_string().unwrap();
+    let res = ureq::get(&addr)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
     println!("{res}");
 
     // make sure it is valid json and only contains one entry

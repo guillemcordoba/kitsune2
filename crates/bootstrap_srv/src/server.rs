@@ -235,9 +235,14 @@ impl Handler<'_> {
     /// Respond to a request for authentication token.
     fn handle_authenticate_put(
         &mut self,
-        _token: String,
+        token: String,
     ) -> std::io::Result<(u16, Vec<u8>)> {
-        todo!("add token to valid auth header list")
+        // TODO add token to valid auth header list
+        let out = serde_json::to_string(&serde_json::json!({
+            "authToken": token,
+        }))
+        .unwrap();
+        Ok((200, out.into_bytes()))
     }
 
     /// Respond to a request for the agent infos within a space.
