@@ -156,10 +156,12 @@ fn setup_incoming_listener(
             tracing::error!("Read to end error");
             return;
         };
+        println!("afterrecv");
         let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
             tracing::error!("Stop error");
             return;
         };
+        println!("afterstop");
         let Some(relay_url_info) = remote_info.relay_url else {
             tracing::error!("Remote info error ");
             return;
@@ -358,14 +360,18 @@ impl TxImp for IrohTransport {
                 .await
                 .map_err(|err| K2Error::other("Failed to open uni strem"))?;
 
+            println!("beforewrite");
             send.write_all(data.as_ref())
                 .await
                 .map_err(|err| K2Error::other("Failed to write all"))?;
+            println!("afterwrite");
             send.finish()
                 .map_err(|err| K2Error::other("Failed to close stream"))?;
+            println!("afterfinish");
             send.stopped()
                 .await
                 .map_err(|err| K2Error::other("error stopping"))?;
+            println!("afterstop");
             // connection.closed().await;
             Ok(())
         })
