@@ -156,10 +156,10 @@ fn setup_incoming_listener(
             tracing::error!("Read to end error");
             return;
         };
-        let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
-            tracing::error!("Stop error ");
-            return;
-        };
+        // let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
+        //     tracing::error!("Stop error ");
+        //     return;
+        // };
         let Some(relay_url_info) = remote_info.relay_url else {
             tracing::error!("Remote info error ");
             return;
@@ -351,6 +351,7 @@ impl TxImp for IrohTransport {
             })?;
 
             let connection = self.get_or_open_connection_with(&addr).await?;
+            tracing::error!("Connection opened");
 
             let mut send = connection
                 .open_uni()
