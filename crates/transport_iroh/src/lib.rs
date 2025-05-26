@@ -102,24 +102,29 @@ struct IrohTransport {
 impl IrohTransport {
     async fn get_or_open_connection_with(
         &self,
-        node_id: &NodeId,
+        node_addr: &NodeAddr,
     ) -> Result<Connection, K2Error> {
         let mut connections = self.connections.lock().await;
 
-        if let Some(connection) = connections.get(node_id) {
+        if let Some(connection) = connections.get(&node_addr.node_id) {
             Ok(connection.clone().0)
         } else {
-            let connection =
-                self.endpoint.connect(node_id.clone(), ALPN).await.map_err(
-                    |err| K2Error::other(format!("failed to connect: {err:?}")),
-                )?;
+            let connection = self
+                .endpoint
+                .connect(node_addr.clone(), ALPN)
+                .await
+                .map_err(|err| {
+                    K2Error::other(format!("failed to connect: {err:?}"))
+                })?;
             let abort_handle = setup_incoming_listener(
                 self.endpoint.clone(),
                 &connection,
                 self.handler.clone(),
             );
-            connections
-                .insert(node_id.clone(), (connection.clone(), abort_handle));
+            connections.insert(
+                node_addr.node_id.clone(),
+                (connection.clone(), abort_handle),
+            );
             Ok(connection)
         }
     }
@@ -340,8 +345,7 @@ impl TxImp for IrohTransport {
                 K2Error::other(format!("bad peer url: {:?}", err))
             })?;
 
-            let connection =
-                self.get_or_open_connection_with(&addr.node_id).await?;
+            let connection = self.get_or_open_connection_with(&addr).await?;
 
             let mut send = connection
                 .open_uni()
