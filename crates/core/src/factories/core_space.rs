@@ -25,8 +25,8 @@ mod config {
     impl Default for CoreSpaceConfig {
         fn default() -> Self {
             Self {
-                re_sign_freq_ms: 1000 * 60,
-                re_sign_expire_time_ms: 1000 * 60 * 5,
+                re_sign_freq_ms: 1000 * 5,
+                re_sign_expire_time_ms: 1000 * 5,
             }
         }
     }
@@ -345,7 +345,7 @@ impl Space for CoreSpace {
                         // sign a new agent info
                         let created_at = Timestamp::now();
                         let expires_at = created_at
-                            + std::time::Duration::from_secs(60 * 20);
+                            + std::time::Duration::from_secs(60);
                         let info = AgentInfo {
                             agent: local_agent2.agent().clone(),
                             space,
