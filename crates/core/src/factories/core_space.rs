@@ -345,7 +345,7 @@ impl Space for CoreSpace {
                         // sign a new agent info
                         let created_at = Timestamp::now();
                         let expires_at = created_at
-                            + std::time::Duration::from_secs(60);
+                            + std::time::Duration::from_secs(30);
                         let info = AgentInfo {
                             agent: local_agent2.agent().clone(),
                             space,

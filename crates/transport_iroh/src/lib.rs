@@ -142,17 +142,11 @@ fn setup_incoming_listener(
                 tracing::error!("Accept uni error");
                 return;
             };
-            println!("yesafteracceptuni");
 
             let Ok(data) = recv.read_to_end(1_000_000_000).await else {
                 tracing::error!("Read to end error");
                 return;
             };
-            println!("afterrecv");
-            // let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
-            //     tracing::error!("Stop error");
-            //     return;
-            // };
             let Ok(node_id) = connection.remote_node_id() else {
                 tracing::error!("Remote node id error");
                 return;
@@ -166,7 +160,6 @@ fn setup_incoming_listener(
                 tracing::error!("Remote info error ");
                 return;
             };
-            println!("afterrecv1");
 
             let Ok(peer) =
                 to_peer_url(relay_url_info.relay_url.into(), node_id)
@@ -174,13 +167,11 @@ fn setup_incoming_listener(
                 tracing::error!("Url from str error");
                 return;
             };
-            println!("afterrecv2");
 
             let Ok(()) = handler.recv_data(peer, data.into()) else {
                 tracing::error!("recv_data error");
                 return;
             };
-            println!("afterrecv3");
         }
     })
     .abort_handle()
@@ -358,25 +349,20 @@ impl TxImp for IrohTransport {
             })?;
 
             let connection = self.get_or_open_connection_with(&addr).await?;
-            println!("Connection opened");
 
             let mut send = connection
                 .open_uni()
                 .await
                 .map_err(|err| K2Error::other("Failed to open uni strem"))?;
 
-            println!("beforewrite");
             send.write_all(data.as_ref())
                 .await
                 .map_err(|err| K2Error::other("Failed to write all"))?;
-            println!("afterwrite");
             send.finish()
                 .map_err(|err| K2Error::other("Failed to close stream"))?;
-            println!("afterfinish");
             send.stopped()
                 .await
                 .map_err(|err| K2Error::other("error stopping"))?;
-            println!("afterstop");
             // connection.closed().await;
             Ok(())
         })
@@ -422,13 +408,11 @@ async fn evt_task(
         let endpoint = endpoint.clone();
         let handler = handler.clone();
         let connections = connections.clone();
-        println!("yeshere1");
         tokio::spawn(async move {
             let Ok(connection) = incoming.await else {
                 tracing::error!("Incoming connection error");
                 return;
             };
-            println!("yeshere");
             let Ok(node_id) = connection.remote_node_id() else {
                 tracing::error!("Remote node id error");
                 return;
