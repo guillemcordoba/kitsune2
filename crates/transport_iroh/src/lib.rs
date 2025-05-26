@@ -161,22 +161,24 @@ fn setup_incoming_listener(
         //     tracing::error!("Stop error");
         //     return;
         // };
-        println!("afterstop");
         let Some(relay_url_info) = remote_info.relay_url else {
             tracing::error!("Remote info error ");
             return;
         };
+        println!("afterrecv1");
 
         let Ok(peer) = to_peer_url(relay_url_info.relay_url.into(), node_id)
         else {
             tracing::error!("Url from str error");
             return;
         };
+        println!("afterrecv2");
 
         let Ok(()) = handler.recv_data(peer, data.into()) else {
             tracing::error!("recv_data error");
             return;
         };
+        println!("afterrecv3");
     })
     .abort_handle()
 }
