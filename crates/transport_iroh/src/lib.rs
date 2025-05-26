@@ -157,10 +157,10 @@ fn setup_incoming_listener(
             return;
         };
         println!("afterrecv");
-        let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
-            tracing::error!("Stop error");
-            return;
-        };
+        // let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
+        //     tracing::error!("Stop error");
+        //     return;
+        // };
         println!("afterstop");
         let Some(relay_url_info) = remote_info.relay_url else {
             tracing::error!("Remote info error ");
