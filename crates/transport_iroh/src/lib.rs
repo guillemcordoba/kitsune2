@@ -137,48 +137,51 @@ fn setup_incoming_listener(
 ) -> tokio::task::AbortHandle {
     let connection = connection.clone();
     tokio::spawn(async move {
-        let Ok(node_id) = connection.remote_node_id() else {
-            tracing::error!("Remote node id error");
-            return;
-        };
+        loop {
+            let Ok(mut recv) = connection.accept_uni().await else {
+                tracing::error!("Accept uni error");
+                return;
+            };
+            println!("yesafteracceptuni");
 
-        let Some(remote_info) = endpoint.remote_info(node_id) else {
-            tracing::error!("Remote info error ");
-            return;
-        };
-        let Ok(mut recv) = connection.accept_uni().await else {
-            tracing::error!("Accept uni error");
-            return;
-        };
-        println!("yesafteracceptuni");
+            let Ok(data) = recv.read_to_end(1_000_000_000).await else {
+                tracing::error!("Read to end error");
+                return;
+            };
+            println!("afterrecv");
+            // let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
+            //     tracing::error!("Stop error");
+            //     return;
+            // };
+            let Ok(node_id) = connection.remote_node_id() else {
+                tracing::error!("Remote node id error");
+                return;
+            };
 
-        let Ok(data) = recv.read_to_end(1_000_000_000).await else {
-            tracing::error!("Read to end error");
-            return;
-        };
-        println!("afterrecv");
-        // let Ok(()) = recv.stop(VarInt::from_u32(0)) else {
-        //     tracing::error!("Stop error");
-        //     return;
-        // };
-        let Some(relay_url_info) = remote_info.relay_url else {
-            tracing::error!("Remote info error ");
-            return;
-        };
-        println!("afterrecv1");
+            let Some(remote_info) = endpoint.remote_info(node_id) else {
+                tracing::error!("Remote info error ");
+                return;
+            };
+            let Some(relay_url_info) = remote_info.relay_url else {
+                tracing::error!("Remote info error ");
+                return;
+            };
+            println!("afterrecv1");
 
-        let Ok(peer) = to_peer_url(relay_url_info.relay_url.into(), node_id)
-        else {
-            tracing::error!("Url from str error");
-            return;
-        };
-        println!("afterrecv2");
+            let Ok(peer) =
+                to_peer_url(relay_url_info.relay_url.into(), node_id)
+            else {
+                tracing::error!("Url from str error");
+                return;
+            };
+            println!("afterrecv2");
 
-        let Ok(()) = handler.recv_data(peer, data.into()) else {
-            tracing::error!("recv_data error");
-            return;
-        };
-        println!("afterrecv3");
+            let Ok(()) = handler.recv_data(peer, data.into()) else {
+                tracing::error!("recv_data error");
+                return;
+            };
+            println!("afterrecv3");
+        }
     })
     .abort_handle()
 }
