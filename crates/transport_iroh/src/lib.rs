@@ -146,8 +146,9 @@ fn setup_incoming_listener(
     let connection = connection.clone();
     tokio::spawn(async move {
         loop {
-            let Ok(mut recv) = connection.accept_uni().await else {
-                tracing::error!("Accept uni error");
+            let result = connection.accept_uni().await;
+            let Ok(mut recv) = result else {
+                tracing::error!("Accept uni error: {result:?}");
                 return;
             };
 
