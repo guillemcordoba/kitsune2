@@ -100,17 +100,17 @@ struct PeerConnection {
 
 struct IrohTransport {
     endpoint: Arc<Endpoint>,
-    connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
+    incoming_connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
+    outgoing_connections: Arc<Mutex<BTreeMap<NodeAddr, Connection>>>,
     evt_task: tokio::task::AbortHandle,
-    handler: Arc<TxImpHnd>,
 }
 
 impl IrohTransport {
     async fn get_or_open_connection_with(
         &self,
         node_addr: &NodeAddr,
-    ) -> Result<PeerConnection, K2Error> {
-        let mut connections = self.connections.lock().await;
+    ) -> Result<Connection, K2Error> {
+        let mut connections = self.outgoing_connections.lock().await;
 
         if let Some(connection) = connections.get(&node_addr) {
             Ok(connection.clone())
@@ -122,80 +122,22 @@ impl IrohTransport {
                 .map_err(|err| {
                     K2Error::other(format!("failed to connect: {err:?}"))
                 })?;
-            let recv_abort_handle = setup_incoming_listener(
-                self.endpoint.clone(),
-                &connection,
-                self.handler.clone(),
-            );
-            let peer_connection = PeerConnection {
-                node_addr: node_addr.clone(),
-                connection: connection.clone(),
-                recv_abort_handle,
-            };
-            connections.insert(node_addr.clone(), peer_connection.clone());
-            Ok(peer_connection)
+            connections.insert(node_addr.clone(), connection.clone());
+            Ok(connection)
         }
     }
 }
-
-fn setup_incoming_listener(
-    endpoint: Arc<Endpoint>,
-    connection: &Connection,
-    handler: Arc<TxImpHnd>,
-) -> tokio::task::AbortHandle {
-    let connection = connection.clone();
-    tokio::spawn(async move {
-        loop {
-            let result = connection.accept_uni().await;
-            let Ok(mut recv) = result else {
-                tracing::error!("Accept uni error: {result:?}");
-                return;
-            };
-
-            let Ok(data) = recv.read_to_end(1_000_000_000).await else {
-                tracing::error!("Read to end error");
-                return;
-            };
-            let Ok(node_id) = connection.remote_node_id() else {
-                tracing::error!("Remote node id error");
-                return;
-            };
-
-            let Some(remote_info) = endpoint.remote_info(node_id) else {
-                tracing::error!("Remote info error ");
-                return;
-            };
-            let Some(relay_url_info) = remote_info.relay_url else {
-                tracing::error!("Remote info error ");
-                return;
-            };
-
-            let Ok(peer) =
-                to_peer_url(relay_url_info.relay_url.into(), node_id)
-            else {
-                tracing::error!("Url from str error");
-                return;
-            };
-
-            let Ok(()) = handler.recv_data(peer, data.into()) else {
-                tracing::error!("recv_data error");
-                return;
-            };
-        }
-    })
-    .abort_handle()
-}
-
 impl std::fmt::Debug for IrohTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "IrohTransport {{
                 endpoint: {:?},
-                connections: {:?},
+                outgoing_connections: {:?},
+                incoming_connections: {:?},
                 
             }}",
-            self.endpoint, self.connections
+            self.endpoint, self.outgoing_connections, self.incoming_connections
         )
     }
 }
@@ -231,10 +173,11 @@ impl IrohTransport {
         let _relay_url = endpoint.home_relay().initialized().await.unwrap();
         let endpoint = Arc::new(endpoint);
 
-        let connections = Arc::new(Mutex::new(BTreeMap::new()));
+        let outgoing_connections = Arc::new(Mutex::new(BTreeMap::new()));
+        let incoming_connections = Arc::new(Mutex::new(BTreeMap::new()));
 
         let evt_task = tokio::task::spawn(evt_task(
-            connections.clone(),
+            incoming_connections.clone(),
             handler.clone(),
             endpoint.clone(),
         ))
@@ -242,9 +185,9 @@ impl IrohTransport {
 
         let out: DynTxImp = Arc::new(Self {
             endpoint,
-            connections,
+            incoming_connections,
+            outgoing_connections,
             evt_task,
-            handler,
         });
 
         Ok(out)
@@ -339,12 +282,17 @@ impl TxImp for IrohTransport {
                 tracing::error!("Bad peer url to node addr");
                 return;
             };
-            let mut connections = self.connections.lock().await;
+            let mut connections = self.incoming_connections.lock().await;
             if let Some(peer_connection) = connections.get(&addr) {
                 peer_connection
                     .connection
                     .close(VarInt::from_u32(0), b"disconnected");
                 peer_connection.recv_abort_handle.abort();
+                connections.remove(&addr);
+            }
+            let mut connections = self.outgoing_connections.lock().await;
+            if let Some(connection) = connections.get(&addr) {
+                connection.close(VarInt::from_u32(0), b"disconnected");
                 connections.remove(&addr);
             }
             ()
@@ -357,23 +305,19 @@ impl TxImp for IrohTransport {
                 K2Error::other(format!("bad peer url: {:?}", err))
             })?;
 
-            let peer_connection =
-                self.get_or_open_connection_with(&addr).await?;
+            let connection = self.get_or_open_connection_with(&addr).await?;
 
-            let mut send = match peer_connection.connection.open_uni().await {
+            let mut send = match connection.open_uni().await {
                 Ok(s) => s,
                 Err(_) => {
-                    let mut connections = self.connections.lock().await;
-                    peer_connection.recv_abort_handle.abort();
-                    peer_connection
-                        .connection
-                        .close(VarInt::from_u32(0), b"disconnected");
+                    let mut connections =
+                        self.outgoing_connections.lock().await;
+                    connection.close(VarInt::from_u32(0), b"disconnected");
                     connections.remove(&addr);
 
                     let new_peer_connection =
                         self.get_or_open_connection_with(&addr).await?;
                     new_peer_connection
-                        .connection
                         .open_uni()
                         .await
                         .map_err(|err| K2Error::other("could not open uni"))?
@@ -396,16 +340,28 @@ impl TxImp for IrohTransport {
 
     fn dump_network_stats(&self) -> BoxFut<'_, K2Result<TransportStats>> {
         Box::pin(async move {
-            let connections = self.connections.lock().await;
+            let connections = self.incoming_connections.lock().await;
+            let mut incoming_peer_urls: BTreeSet<Url> = connections
+                .iter()
+                .filter_map(|(node_addr, _)| {
+                    node_addr_to_peer_url(node_addr.clone()).ok()
+                })
+                .collect();
+            let connections = self.outgoing_connections.lock().await;
+            let mut outgoing_peer_urls: BTreeSet<Url> = connections
+                .iter()
+                .filter_map(|(node_addr, _)| {
+                    node_addr_to_peer_url(node_addr.clone()).ok()
+                })
+                .collect();
+            incoming_peer_urls.append(&mut outgoing_peer_urls);
+            // let mut outgoin_connections =
+            //     self.outgoing_connections.lock().await;
+            // connections.append(&mut outgoin_connections);
 
             Ok(TransportStats {
                 backend: format!("iroh"),
-                peer_urls: connections
-                    .iter()
-                    .filter_map(|(node_addr, _)| {
-                        node_addr_to_peer_url(node_addr.clone()).ok()
-                    })
-                    .collect(),
+                peer_urls: incoming_peer_urls.into_iter().collect(),
                 connections: connections
                     .iter()
                     .map(|(peer_addr, conn)| TransportConnectionStats {
@@ -425,14 +381,14 @@ impl TxImp for IrohTransport {
 }
 
 async fn evt_task(
-    connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
+    incoming_connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
     handler: Arc<TxImpHnd>,
     endpoint: Arc<Endpoint>,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let endpoint = endpoint.clone();
         let handler = handler.clone();
-        let connections = connections.clone();
+        let connections = incoming_connections.clone();
         tokio::spawn(async move {
             let Ok(connection) = incoming.await else {
                 tracing::error!("Incoming connection error");
@@ -466,4 +422,52 @@ async fn evt_task(
             );
         });
     }
+}
+
+fn setup_incoming_listener(
+    endpoint: Arc<Endpoint>,
+    connection: &Connection,
+    handler: Arc<TxImpHnd>,
+) -> tokio::task::AbortHandle {
+    let connection = connection.clone();
+    tokio::spawn(async move {
+        loop {
+            let result = connection.accept_uni().await;
+            let Ok(mut recv) = result else {
+                tracing::error!("Accept uni error: {result:?}");
+                return;
+            };
+
+            let Ok(data) = recv.read_to_end(1_000_000_000).await else {
+                tracing::error!("Read to end error");
+                return;
+            };
+            let Ok(node_id) = connection.remote_node_id() else {
+                tracing::error!("Remote node id error");
+                return;
+            };
+
+            let Some(remote_info) = endpoint.remote_info(node_id) else {
+                tracing::error!("Remote info error ");
+                return;
+            };
+            let Some(relay_url_info) = remote_info.relay_url else {
+                tracing::error!("Remote info error ");
+                return;
+            };
+
+            let Ok(peer) =
+                to_peer_url(relay_url_info.relay_url.into(), node_id)
+            else {
+                tracing::error!("Url from str error");
+                return;
+            };
+
+            let Ok(()) = handler.recv_data(peer, data.into()) else {
+                tracing::error!("recv_data error");
+                return;
+            };
+        }
+    })
+    .abort_handle()
 }
