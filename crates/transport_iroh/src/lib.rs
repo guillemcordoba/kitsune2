@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use iroh::{
-    endpoint::{Connection, VarInt},
+    endpoint::{Connection, SendStream, VarInt},
     Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl,
 };
 use kitsune2_api::*;
@@ -93,37 +93,77 @@ const ALPN: &[u8] = b"kitsune2";
 
 #[derive(Debug, Clone)]
 struct PeerConnection {
-    node_addr: NodeAddr,
     connection: Connection,
     recv_abort_handle: AbortHandle,
 }
 
 struct IrohTransport {
+    handler: Arc<TxImpHnd>,
     endpoint: Arc<Endpoint>,
     incoming_connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
     outgoing_connections: Arc<Mutex<BTreeMap<NodeAddr, Connection>>>,
-    evt_task: tokio::task::AbortHandle,
+    tasks: Vec<AbortHandle>,
 }
 
 impl IrohTransport {
     async fn get_or_open_connection_with(
         &self,
-        node_addr: &NodeAddr,
+        peer_url: Url,
     ) -> Result<Connection, K2Error> {
+        let node_addr = peer_url_to_node_addr(peer_url.clone())
+            .map_err(|err| K2Error::other_src("bad peer url", err))?;
+
         let mut connections = self.outgoing_connections.lock().await;
 
         if let Some(connection) = connections.get(&node_addr) {
             Ok(connection.clone())
         } else {
-            let connection = self
+            let connection = match self
                 .endpoint
                 .connect(node_addr.clone(), ALPN)
                 .await
                 .map_err(|err| {
                     K2Error::other(format!("failed to connect: {err:?}"))
-                })?;
+                }) {
+                Ok(c) => c,
+                Err(err) => {
+                    tracing::error!(
+                        "connect() failed: marking {peer_url} as unresponsive"
+                    );
+                    self.handler
+                        .set_unresponsive(peer_url.clone(), Timestamp::now())
+                        .await?;
+                    return Err(err);
+                }
+            };
+
+            tracing::debug!("Connect with {peer_url} successful.");
             connections.insert(node_addr.clone(), connection.clone());
             Ok(connection)
+        }
+    }
+
+    async fn open_send_stream(
+        &self,
+        peer_url: Url,
+    ) -> Result<SendStream, K2Error> {
+        let connection =
+            self.get_or_open_connection_with(peer_url.clone()).await?;
+        match connection.open_uni().await {
+            Ok(s) => {
+                tracing::debug!("open_uni() to {peer_url} successful.");
+
+                Ok(s)
+            }
+            Err(err) => {
+                tracing::error!(
+                    "open_uni() failed: marking {peer_url} as unresponsive"
+                );
+                self.handler
+                    .set_unresponsive(peer_url.clone(), Timestamp::now())
+                    .await?;
+                return Err(K2Error::other_src("failed to open_uni", err));
+            }
         }
     }
 }
@@ -144,7 +184,9 @@ impl std::fmt::Debug for IrohTransport {
 
 impl Drop for IrohTransport {
     fn drop(&mut self) {
-        self.evt_task.abort();
+        for task in &mut self.tasks {
+            task.abort();
+        }
     }
 }
 
@@ -157,9 +199,12 @@ impl IrohTransport {
             Some(relay_url_str) => {
                 let relay_url = url::Url::parse(relay_url_str.as_str())
                     .map_err(|err| {
-                        K2Error::other("Failed to parse custom relay url")
+                        K2Error::other_src(
+                            "Failed to parse custom relay url",
+                            err,
+                        )
                     })?;
-                RelayMode::Custom(RelayMap::from_url(relay_url.into()))
+                RelayMode::Custom(RelayMap::from(RelayUrl::from(relay_url)))
             }
             None => RelayMode::Default,
         };
@@ -168,13 +213,39 @@ impl IrohTransport {
             .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
-            .map_err(|err| K2Error::other("bad"))?;
+            .map_err(|err| K2Error::other("failed to bind endpoint"))?;
 
         let _relay_url = endpoint.home_relay().initialized().await.unwrap();
         let endpoint = Arc::new(endpoint);
 
         let outgoing_connections = Arc::new(Mutex::new(BTreeMap::new()));
         let incoming_connections = Arc::new(Mutex::new(BTreeMap::new()));
+        let h = handler.clone();
+        let e = endpoint.clone();
+        let watch_relay_task = tokio::spawn(async move {
+            loop {
+                match e.home_relay().updated().await {
+                    Ok(new_url) => {
+                        let Some(url) = new_url else {
+                            tracing::error!("New URL is None.");
+                            break;
+                        };
+                        let url = to_peer_url(url.clone().into(), e.node_id())
+                            .expect("Invalid URL");
+
+                        tracing::info!("New relay URL: {url:?}");
+
+                        h.new_listening_address(url).await
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed to get new relay url: {err:?}."
+                        );
+                    }
+                }
+            }
+        })
+        .abort_handle();
 
         let evt_task = tokio::task::spawn(evt_task(
             incoming_connections.clone(),
@@ -184,10 +255,11 @@ impl IrohTransport {
         .abort_handle();
 
         let out: DynTxImp = Arc::new(Self {
+            handler,
             endpoint,
             incoming_connections,
             outgoing_connections,
-            evt_task,
+            tasks: vec![watch_relay_task, evt_task],
         });
 
         Ok(out)
@@ -203,14 +275,14 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
     };
     let decoded_peer_id = base64::prelude::BASE64_URL_SAFE_NO_PAD
         .decode(peer_id)
-        .map_err(|err| K2Error::other("failed to decode peer id"))?;
+        .map_err(|err| K2Error::other_src("failed to decode peer id", err))?;
     let node_id = NodeId::try_from(decoded_peer_id.as_slice())
-        .map_err(|err| K2Error::other(format!("bad peer id: {err}")))?;
+        .map_err(|err| K2Error::other_src("bad peer id", err))?;
 
     let relay_url = url::Url::parse(
         format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
     )
-    .map_err(|err| K2Error::other("Bad addr"))?;
+    .map_err(|err| K2Error::other_src("Bad addr", err))?;
 
     Ok(NodeAddr {
         node_id,
@@ -262,14 +334,20 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
         let home_relay = self.endpoint.home_relay().get();
-        let Ok(Some(url)) = home_relay else {
+        let Ok(url) = home_relay else {
             tracing::error!("Failed to get home relay");
             return None;
         };
-        Some(
-            to_peer_url(url.into(), self.endpoint.node_id())
-                .expect("Invalid URL"),
-        )
+        let Some(url) = url else {
+            tracing::error!("Failed to get home relay");
+            return None;
+        };
+        let peer_url = to_peer_url(url.clone().into(), self.endpoint.node_id())
+            .expect("Invalid URL");
+
+        tracing::info!("My peer URL: {peer_url}.");
+
+        Some(peer_url)
     }
 
     fn disconnect(
@@ -278,6 +356,7 @@ impl TxImp for IrohTransport {
         _payload: Option<(String, bytes::Bytes)>,
     ) -> BoxFut<'_, ()> {
         Box::pin(async move {
+            tracing::debug!("Disconnecting from {peer}.");
             let Ok(addr) = peer_url_to_node_addr(peer) else {
                 tracing::error!("Bad peer url to node addr");
                 return;
@@ -301,39 +380,21 @@ impl TxImp for IrohTransport {
 
     fn send(&self, peer: Url, data: bytes::Bytes) -> BoxFut<'_, K2Result<()>> {
         Box::pin(async move {
-            let addr = peer_url_to_node_addr(peer).map_err(|err| {
-                K2Error::other(format!("bad peer url: {:?}", err))
+            tracing::debug!("Attempting to send message to {peer}.");
+
+            let mut send = self.open_send_stream(peer.clone()).await?;
+
+            send.write_all(data.as_ref()).await.map_err(|err| {
+                K2Error::other_src("Failed to write all", err)
             })?;
-
-            let connection = self.get_or_open_connection_with(&addr).await?;
-
-            let mut send = match connection.open_uni().await {
-                Ok(s) => s,
-                Err(_) => {
-                    let mut connections =
-                        self.outgoing_connections.lock().await;
-                    connection.close(VarInt::from_u32(0), b"disconnected");
-                    connections.remove(&addr);
-
-                    let new_peer_connection =
-                        self.get_or_open_connection_with(&addr).await?;
-                    new_peer_connection
-                        .open_uni()
-                        .await
-                        .map_err(|err| K2Error::other("could not open uni"))?
-                }
-            };
-            // .map_err(|err| K2Error::other("Failed to open uni strem"))?;
-
-            send.write_all(data.as_ref())
-                .await
-                .map_err(|err| K2Error::other("Failed to write all"))?;
-            send.finish()
-                .map_err(|err| K2Error::other("Failed to close stream"))?;
+            send.finish().map_err(|err| {
+                K2Error::other_src("Failed to close stream", err)
+            })?;
             send.stopped()
                 .await
-                .map_err(|err| K2Error::other("error stopping"))?;
-            // connection.closed().await;
+                .map_err(|err| K2Error::other_src("error stopping", err))?;
+
+            tracing::debug!("Write all with {peer} successful.");
             Ok(())
         })
     }
@@ -390,9 +451,12 @@ async fn evt_task(
         let handler = handler.clone();
         let connections = incoming_connections.clone();
         tokio::spawn(async move {
-            let Ok(connection) = incoming.await else {
-                tracing::error!("Incoming connection error");
-                return;
+            let connection = match incoming.await {
+                Ok(c) => c,
+                Err(err) => {
+                    tracing::error!("Incoming connection error: {err:?}.");
+                    return;
+                }
             };
             let Ok(node_id) = connection.remote_node_id() else {
                 tracing::error!("Remote node id error");
@@ -415,7 +479,6 @@ async fn evt_task(
             connections.insert(
                 node_addr.clone(),
                 PeerConnection {
-                    node_addr,
                     connection,
                     recv_abort_handle,
                 },
@@ -462,11 +525,14 @@ fn setup_incoming_listener(
                 tracing::error!("Url from str error");
                 return;
             };
+            tracing::debug!("Incoming connection received for {peer}.");
 
-            let Ok(()) = handler.recv_data(peer, data.into()) else {
+            let Ok(()) = handler.recv_data(peer.clone(), data.into()) else {
                 tracing::error!("recv_data error");
                 return;
             };
+            tracing::debug!("Correctly recv_data for {peer}.");
+            connection.close(VarInt::from_u32(0), b"ended");
         }
     })
     .abort_handle()
