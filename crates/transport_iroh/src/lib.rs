@@ -122,9 +122,7 @@ impl IrohTransport {
                 .endpoint
                 .connect(node_addr.clone(), ALPN)
                 .await
-                .map_err(|err| {
-                    K2Error::other(format!("failed to connect: {err:?}"))
-                }) {
+            {
                 Ok(c) => c,
                 Err(err) => {
                     tracing::error!(
@@ -133,7 +131,9 @@ impl IrohTransport {
                     self.handler
                         .set_unresponsive(peer_url.clone(), Timestamp::now())
                         .await?;
-                    return Err(err);
+                    return Err(K2Error::other(format!(
+                        "failed to connect: {err:?}"
+                    )));
                 }
             };
 
@@ -167,6 +167,7 @@ impl IrohTransport {
         }
     }
 }
+
 impl std::fmt::Debug for IrohTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -390,9 +391,15 @@ impl TxImp for IrohTransport {
             send.finish().map_err(|err| {
                 K2Error::other_src("Failed to close stream", err)
             })?;
-            send.stopped()
-                .await
-                .map_err(|err| K2Error::other_src("error stopping", err))?;
+            if let Err(err) = send.stopped().await {
+                tracing::error!(
+                    "stopped() failed: marking {peer} as unresponsive"
+                );
+                self.handler
+                    .set_unresponsive(peer.clone(), Timestamp::now())
+                    .await?;
+                return Err(K2Error::other_src("error stopping", err));
+            }
 
             tracing::debug!("Write all with {peer} successful.");
             Ok(())
@@ -532,7 +539,7 @@ fn setup_incoming_listener(
                 return;
             };
             tracing::debug!("Correctly recv_data for {peer}.");
-            connection.close(VarInt::from_u32(0), b"ended");
+            // connection.close(VarInt::from_u32(0), b"ended");
         }
     })
     .abort_handle()

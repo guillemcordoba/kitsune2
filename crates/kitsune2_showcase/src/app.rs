@@ -1,7 +1,7 @@
 use super::*;
 use bytes::Bytes;
 use kitsune2_api::*;
-use kitsune2_core::get_all_remote_agents;
+use kitsune2_core::{get_all_remote_agents, get_all_responsive_remote_agents};
 use std::sync::Arc;
 
 // hard-coded random space
@@ -121,9 +121,10 @@ impl App {
 
         self.p
             .print_line("checking for peers to chat with...".into());
-        let peers = get_all_remote_agents(
+        let peers = get_all_responsive_remote_agents(
             self.s.peer_store().clone(),
             self.s.local_agent_store().clone(),
+            self.s.peer_meta_store().clone(),
         )
         .await?
         .into_iter()
