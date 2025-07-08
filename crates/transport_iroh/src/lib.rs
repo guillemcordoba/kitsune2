@@ -125,7 +125,7 @@ impl IrohTransport {
             {
                 Ok(c) => c,
                 Err(err) => {
-                    tracing::error!(
+                    tracing::warn!(
                         "connect() failed: marking {peer_url} as unresponsive"
                     );
                     self.handler
@@ -156,7 +156,7 @@ impl IrohTransport {
                 Ok(s)
             }
             Err(err) => {
-                tracing::error!(
+                tracing::warn!(
                     "open_uni() failed: marking {peer_url} as unresponsive"
                 );
                 self.handler
@@ -392,7 +392,7 @@ impl TxImp for IrohTransport {
                 K2Error::other_src("Failed to close stream", err)
             })?;
             if let Err(err) = send.stopped().await {
-                tracing::error!(
+                tracing::warn!(
                     "stopped() failed: marking {peer} as unresponsive"
                 );
                 self.handler
