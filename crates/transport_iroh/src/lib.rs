@@ -147,6 +147,9 @@ impl IrohTransport {
         &self,
         peer_url: Url,
     ) -> Result<SendStream, K2Error> {
+        let node_addr = peer_url_to_node_addr(peer_url.clone())
+            .map_err(|err| K2Error::other_src("bad peer url", err))?;
+
         let connection =
             self.get_or_open_connection_with(peer_url.clone()).await?;
         match connection.open_uni().await {
@@ -156,13 +159,50 @@ impl IrohTransport {
                 Ok(s)
             }
             Err(err) => {
-                tracing::warn!(
-                    "open_uni() failed: marking {peer_url} as unresponsive"
-                );
-                self.handler
-                    .set_unresponsive(peer_url.clone(), Timestamp::now())
-                    .await?;
-                return Err(K2Error::other_src("failed to open_uni", err));
+                tracing::info!("open_uni() with existing connection to {peer_url} failed: {err:?}. Recreating connection.");
+                let connection = match self
+                    .endpoint
+                    .connect(node_addr.clone(), ALPN)
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        tracing::warn!(
+                            "connect() failed: marking {peer_url} as unresponsive"
+                        );
+                        self.handler
+                            .set_unresponsive(
+                                peer_url.clone(),
+                                Timestamp::now(),
+                            )
+                            .await?;
+                        return Err(K2Error::other(format!(
+                            "failed to connect: {err:?}"
+                        )));
+                    }
+                };
+
+                let mut connections = self.outgoing_connections.lock().await;
+                tracing::debug!("Connect with {peer_url} successful.");
+                connections.insert(node_addr.clone(), connection.clone());
+
+                match connection.open_uni().await {
+                    Ok(s) => Ok(s),
+                    Err(err) => {
+                        tracing::warn!(
+                            "open_uni() failed: marking {peer_url} as unresponsive"
+                        );
+                        self.handler
+                            .set_unresponsive(
+                                peer_url.clone(),
+                                Timestamp::now(),
+                            )
+                            .await?;
+                        return Err(K2Error::other(format!(
+                            "failed to open_uni(): {err:?}"
+                        )));
+                    }
+                }
             }
         }
     }
