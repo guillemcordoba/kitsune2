@@ -106,17 +106,19 @@ struct IrohTransport {
 }
 
 impl IrohTransport {
-    async fn get_or_open_connection_with(
+    async fn open_send_stream(
         &self,
         peer_url: Url,
-    ) -> Result<Connection, K2Error> {
+    ) -> Result<SendStream, K2Error> {
         let node_addr = peer_url_to_node_addr(peer_url.clone())
             .map_err(|err| K2Error::other_src("bad peer url", err))?;
 
         let mut connections = self.outgoing_connections.lock().await;
 
-        if let Some(connection) = connections.get(&node_addr) {
-            Ok(connection.clone())
+        let (connection, existing) = if let Some(connection) =
+            connections.get(&node_addr)
+        {
+            (connection.clone(), true)
         } else {
             let connection = match self
                 .endpoint
@@ -139,26 +141,16 @@ impl IrohTransport {
 
             tracing::debug!("Connect with {peer_url} successful.");
             connections.insert(node_addr.clone(), connection.clone());
-            Ok(connection)
-        }
-    }
+            (connection, false)
+        };
 
-    async fn open_send_stream(
-        &self,
-        peer_url: Url,
-    ) -> Result<SendStream, K2Error> {
-        let node_addr = peer_url_to_node_addr(peer_url.clone())
-            .map_err(|err| K2Error::other_src("bad peer url", err))?;
-
-        let connection =
-            self.get_or_open_connection_with(peer_url.clone()).await?;
         match connection.open_uni().await {
             Ok(s) => {
                 tracing::debug!("open_uni() to {peer_url} successful.");
 
                 Ok(s)
             }
-            Err(err) => {
+            Err(err) if existing => {
                 tracing::info!("open_uni() with existing connection to {peer_url} failed: {err:?}. Recreating connection.");
                 let connection = match self
                     .endpoint
@@ -182,7 +174,6 @@ impl IrohTransport {
                     }
                 };
 
-                let mut connections = self.outgoing_connections.lock().await;
                 tracing::debug!("Connect with {peer_url} successful.");
                 connections.insert(node_addr.clone(), connection.clone());
 
@@ -203,6 +194,17 @@ impl IrohTransport {
                         )));
                     }
                 }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "open_uni() failed: marking {peer_url} as unresponsive"
+                );
+                self.handler
+                    .set_unresponsive(peer_url.clone(), Timestamp::now())
+                    .await?;
+                return Err(K2Error::other(format!(
+                    "failed to open_uni(): {err:?}"
+                )));
             }
         }
     }
