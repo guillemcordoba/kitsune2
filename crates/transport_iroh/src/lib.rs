@@ -4,7 +4,7 @@
 use base64::Engine;
 use iroh::{
     endpoint::{Connection, SendStream, VarInt},
-    Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl,
+    Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl, Watcher,
 };
 use kitsune2_api::*;
 use std::{
@@ -227,7 +227,7 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(new_url) => {
-                        let Some(url) = new_url else {
+                        let Some(url) = new_url.first() else {
                             tracing::error!("New URL is None.");
                             break;
                         };
@@ -339,7 +339,7 @@ impl TxImp for IrohTransport {
             tracing::error!("Failed to get home relay");
             return None;
         };
-        let Some(url) = url else {
+        let Some(url) = url.first() else {
             tracing::error!("Failed to get home relay");
             return None;
         };
