@@ -113,13 +113,14 @@ impl IrohTransport {
         let node_addr = peer_url_to_node_addr(peer_url.clone())
             .map_err(|err| K2Error::other_src("bad peer url", err))?;
 
-        let mut connections = self.outgoing_connections.lock().await;
+        let connections = self.outgoing_connections.lock().await;
 
         let (connection, existing) = if let Some(connection) =
             connections.get(&node_addr)
         {
             (connection.clone(), true)
         } else {
+            drop(connections);
             let connection = match self
                 .endpoint
                 .connect(node_addr.clone(), ALPN)
@@ -140,6 +141,7 @@ impl IrohTransport {
             };
 
             tracing::debug!("Connect with {peer_url} successful.");
+            let mut connections = self.outgoing_connections.lock().await;
             connections.insert(node_addr.clone(), connection.clone());
             (connection, false)
         };
@@ -175,7 +177,9 @@ impl IrohTransport {
                 };
 
                 tracing::debug!("Connect with {peer_url} successful.");
+                let mut connections = self.outgoing_connections.lock().await;
                 connections.insert(node_addr.clone(), connection.clone());
+                drop(connections);
 
                 match connection.open_uni().await {
                     Ok(s) => Ok(s),
@@ -256,7 +260,7 @@ impl IrohTransport {
             .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
-            .map_err(|err| K2Error::other("failed to bind endpoint"))?;
+            .map_err(|err| K2Error::other_src("failed to bind endpoint", err))?;
 
         let _relay_url = endpoint.home_relay().initialized().await.unwrap();
         let endpoint = Arc::new(endpoint);
