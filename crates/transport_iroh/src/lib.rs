@@ -309,10 +309,11 @@ impl IrohTransport {
                 match e.net_report().updated().await {
                     Ok(Some(report)) => {
                         tracing::info!("New network report: {report:?}.");
-                        let Some(last_report) = maybe_last_report else {
+                        let lr = maybe_last_report.clone();
+                        maybe_last_report = Some(report.clone());
+                        let Some(last_report) = lr else {
                             continue;
                         };
-                        maybe_last_report = Some(report.clone());
 
                         if last_report.udp_v4 == report.udp_v4 {
                             continue;
