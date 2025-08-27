@@ -321,6 +321,8 @@ impl IrohTransport {
                             continue;
                         };
 
+                        tracing::info!("Reconnected to relay: sending new agent info.");
+
                         let url = to_peer_url(url.clone().into(), e.node_id())
                             .expect("Invalid URL");
 
