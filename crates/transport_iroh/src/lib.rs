@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use iroh::{
-    endpoint::{Connection, SendStream, VarInt},
+    endpoint::{ConnectError, Connection, ConnectionError, SendStream, StoppedError, VarInt},
     Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl, Watcher,
 };
 use kitsune2_api::*;
@@ -260,7 +260,9 @@ impl IrohTransport {
             .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
-            .map_err(|err| K2Error::other_src("failed to bind endpoint", err))?;
+            .map_err(|err| {
+                K2Error::other_src("failed to bind endpoint", err)
+            })?;
 
         let _relay_url = endpoint.home_relay().initialized().await;
         let endpoint = Arc::new(endpoint);
@@ -440,6 +442,15 @@ impl TxImp for IrohTransport {
                 self.handler
                     .set_unresponsive(peer.clone(), Timestamp::now())
                     .await?;
+                if let StoppedError::ConnectionLost(_) = err {
+                    let mut connections =
+                        self.outgoing_connections.lock().await;
+                    let addr = peer_url_to_node_addr(peer.clone())?;
+                    if let Some(connection) = connections.get(&addr) {
+                        connection.close(VarInt::from_u32(0), b"disconnected");
+                        connections.remove(&addr);
+                    }
+                }
                 return Err(K2Error::other_src("error stopping", err));
             }
 
