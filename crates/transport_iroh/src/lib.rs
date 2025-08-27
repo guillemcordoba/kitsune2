@@ -3,7 +3,8 @@
 
 use base64::Engine;
 use iroh::{
-    endpoint::{ConnectError, Connection, ConnectionError, SendStream, StoppedError, VarInt},
+    endpoint::{Connection, SendStream, StoppedError, VarInt},
+    net_report::Report,
     Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl, Watcher,
 };
 use kitsune2_api::*;
@@ -234,6 +235,9 @@ impl Drop for IrohTransport {
         for task in &mut self.tasks {
             task.abort();
         }
+        tokio::runtime::Handle::current().block_on(async move {
+            self.endpoint.close().await;
+        });
     }
 }
 
@@ -296,6 +300,41 @@ impl IrohTransport {
         })
         .abort_handle();
 
+        // If we change our offline/online status, create new agent info
+        let h = handler.clone();
+        let e = endpoint.clone();
+        let net_report_task = tokio::spawn(async move {
+            let mut maybe_last_report: Option<Report> = None;
+            loop {
+                match e.net_report().updated().await {
+                    Ok(Some(report)) => {
+                        tracing::info!("New network report: {report:?}.");
+                        let Some(last_report) = maybe_last_report else {
+                            continue;
+                        };
+                        maybe_last_report = Some(report.clone());
+
+                        if last_report.udp_v4 == report.udp_v4 {
+                            continue;
+                        }
+                        let Some(url) = report.preferred_relay else {
+                            continue;
+                        };
+
+                        let url = to_peer_url(url.clone().into(), e.node_id())
+                            .expect("Invalid URL");
+
+                        h.new_listening_address(url).await;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::error!("Failed to get net report: {err:?}.");
+                    }
+                }
+            }
+        })
+        .abort_handle();
+
         let evt_task = tokio::task::spawn(evt_task(
             incoming_connections.clone(),
             handler.clone(),
@@ -308,7 +347,7 @@ impl IrohTransport {
             endpoint,
             incoming_connections,
             outgoing_connections,
-            tasks: vec![watch_relay_task, evt_task],
+            tasks: vec![watch_relay_task, net_report_task, evt_task],
         });
 
         Ok(out)
