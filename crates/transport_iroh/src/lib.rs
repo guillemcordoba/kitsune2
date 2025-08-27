@@ -308,7 +308,7 @@ impl IrohTransport {
             loop {
                 match e.net_report().updated().await {
                     Ok(Some(report)) => {
-                        tracing::info!("New network report: {report:?}.");
+                        tracing::debug!("New network report: {report:?}.");
                         let lr = maybe_last_report.clone();
                         maybe_last_report = Some(report.clone());
                         let Some(last_report) = lr else {
@@ -318,6 +318,9 @@ impl IrohTransport {
                         if last_report.udp_v4 == report.udp_v4 {
                             continue;
                         }
+
+                        tracing::warn!("Network changed! Online status: {}.", report.udp_v4);
+
                         let Some(url) = report.preferred_relay else {
                             continue;
                         };
