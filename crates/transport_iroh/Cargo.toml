@@ -18,7 +18,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing = { workspace = true }
-iroh = "0.90"
+iroh = "0.91"
 url = { workspace = true }
 anyhow = "1"
 

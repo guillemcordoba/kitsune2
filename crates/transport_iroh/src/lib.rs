@@ -262,7 +262,7 @@ impl IrohTransport {
             .await
             .map_err(|err| K2Error::other_src("failed to bind endpoint", err))?;
 
-        let _relay_url = endpoint.home_relay().initialized().await.unwrap();
+        let _relay_url = endpoint.home_relay().initialized().await;
         let endpoint = Arc::new(endpoint);
 
         let outgoing_connections = Arc::new(Mutex::new(BTreeMap::new()));
@@ -380,12 +380,8 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
 
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
-        let home_relay = self.endpoint.home_relay().get();
-        let Ok(url) = home_relay else {
-            tracing::error!("Failed to get home relay");
-            return None;
-        };
-        let Some(url) = url.first() else {
+        let home_relays = self.endpoint.home_relay().get();
+        let Some(url) = home_relays.first() else {
             tracing::error!("Failed to get home relay");
             return None;
         };
