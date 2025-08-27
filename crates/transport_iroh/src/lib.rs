@@ -279,7 +279,7 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(new_urls) => {
-                        let Some(url) = new_url.first() else {
+                        let Some(url) = new_urls.first() else {
                             tracing::error!("New URL is None.");
                             break;
                         };
@@ -322,7 +322,9 @@ impl IrohTransport {
                             continue;
                         };
 
-                        tracing::info!("Reconnected to relay: sending new agent info.");
+                        tracing::info!(
+                            "Reconnected to relay: sending new agent info."
+                        );
 
                         let url = to_peer_url(url.clone().into(), e.node_id())
                             .expect("Invalid URL");
