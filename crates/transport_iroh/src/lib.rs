@@ -632,7 +632,7 @@ fn setup_incoming_listener(
                 tracing::error!("Url from str error");
                 return;
             };
-            tracing::debug!("Incoming connection received for {peer}.");
+            tracing::debug!("Incoming accept_uni received for {peer}.");
 
             let Ok(()) = handler.recv_data(peer.clone(), data.into()) else {
                 tracing::error!("recv_data error");
