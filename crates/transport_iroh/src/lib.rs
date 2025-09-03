@@ -115,10 +115,10 @@ impl IrohTransport {
 
         let connections = self.connections.lock().await;
 
-        let (connection, existing) = if let Some(connection) =
+        let connection = if let Some(connection) =
             connections.get(&node_addr)
         {
-            (connection.connection.clone(), true)
+            connection.connection.clone()
         } else {
             drop(connections);
             let connection = match self
@@ -159,7 +159,7 @@ impl IrohTransport {
                     recv_abort_handle,
                 },
             );
-            (connection, false)
+            connection
         };
 
         match connection.open_uni().await {
@@ -168,72 +168,8 @@ impl IrohTransport {
 
                 Ok(s)
             }
-            Err(err) if existing => {
-                tracing::info!("open_uni() with existing connection to {peer_url} failed: {err:?}. Recreating connection.");
-                let connection = match self
-                    .endpoint
-                    .connect(node_addr.clone(), ALPN)
-                    .await
-                {
-                    Ok(c) => c,
-                    Err(err) => {
-                        tracing::warn!(
-                            "connect() failed: marking {peer_url} as unresponsive"
-                        );
-                        self.handler
-                            .set_unresponsive(
-                                peer_url.clone(),
-                                Timestamp::now(),
-                            )
-                            .await?;
-                        return Err(K2Error::other(format!(
-                            "failed to connect: {err:?}"
-                        )));
-                    }
-                };
-
-                tracing::debug!("Connect with {peer_url} successful.");
-                let mut connections = self.connections.lock().await;
-                let recv_abort_handle = setup_incoming_listener(
-                    self.endpoint.clone(),
-                    &connection,
-                    self.handler.clone(),
-                );
-                if let Some(c) = connections.get(&node_addr) {
-                    c.recv_abort_handle.abort();
-                    c.connection.close(VarInt::from_u32(0), b"disconnected");
-                }
-                connections.insert(
-                    node_addr.clone(),
-                    PeerConnection {
-                        connection: connection.clone(),
-                        recv_abort_handle,
-                    },
-                );
-                drop(connections);
-
-                match connection.open_uni().await {
-                    Ok(s) => Ok(s),
-                    Err(err) => {
-                        tracing::warn!(
-                            "open_uni() failed: marking {peer_url} as unresponsive"
-                        );
-                        self.handler
-                            .set_unresponsive(
-                                peer_url.clone(),
-                                Timestamp::now(),
-                            )
-                            .await?;
-                        return Err(K2Error::other(format!(
-                            "failed to open_uni(): {err:?}"
-                        )));
-                    }
-                }
-            }
             Err(err) => {
-                tracing::warn!(
-                    "open_uni() failed: marking {peer_url} as unresponsive"
-                );
+                tracing::info!("open_uni() with existing connection to {peer_url} failed: {err:?}. Marking {peer_url} as unresponsive.");
                 self.handler
                     .set_unresponsive(peer_url.clone(), Timestamp::now())
                     .await?;
