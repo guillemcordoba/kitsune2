@@ -40,6 +40,7 @@ kitsune2_api = { version = "0.2.13", path = "crates/api" }
 kitsune2_dht = { version = "0.2.13", path = "crates/dht" }
 kitsune2_gossip = { version = "0.2.13", path = "crates/gossip" }
 kitsune2_transport_tx5 = { version = "0.2.13", path = "crates/transport_tx5", default-features = false }
+kitsune2_transport_iroh = { version = "0.2.13", path = "crates/transport_iroh", default-features = false }
 kitsune2_bootstrap_client = { version = "0.2.13", path = "crates/bootstrap_client" }
 
 # used by bootstrap_srv for mpmc worker queue pattern.
