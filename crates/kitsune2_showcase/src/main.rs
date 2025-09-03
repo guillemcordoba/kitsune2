@@ -22,6 +22,7 @@ struct Args {
     nick: String,
 }
 
+
 #[tokio::main]
 async fn main() {
     let pid = std::process::id();
@@ -41,7 +42,8 @@ async fn main() {
                 .from_env_lossy(),
         )
         .with_file(true)
-        .with_line_number(true).try_init();
+        .with_line_number(true)
+        .try_init();
 
     let args = <Args as clap::Parser>::parse();
     let nick = args.nick.clone();
