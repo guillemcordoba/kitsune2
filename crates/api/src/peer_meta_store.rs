@@ -9,6 +9,12 @@ pub const KEY_PREFIX_ROOT: &str = "root";
 /// Meta key for unresponsive URLs.
 pub const META_KEY_UNRESPONSIVE: &str = "unresponsive";
 
+/// Key prefix for items at the root level of the peer meta store.
+pub const KEY_PREFIX_ROOT: &str = "root";
+
+/// Meta key for unresponsive URLs.
+pub const META_KEY_UNRESPONSIVE: &str = "unresponsive";
+
 /// A store for peer metadata.
 ///
 /// This is expected to be backed by a key-value store that keys by space, peer URL and key.

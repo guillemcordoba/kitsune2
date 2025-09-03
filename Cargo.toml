@@ -11,6 +11,7 @@ members = [
   "crates/test_utils",
   "crates/tool_proto_build",
   "crates/transport_tx5",
+  "crates/transport_iroh",
 ]
 
 resolver = "2"

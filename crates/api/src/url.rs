@@ -116,7 +116,7 @@ impl Url {
         })?;
 
         let scheme = match parsed.scheme() {
-            scheme @ "ws" | scheme @ "wss" => scheme,
+            scheme @ "ws" | scheme @ "wss" | scheme @ "https" => scheme,
             oth => {
                 return Err(K2Error::other(format!(
                     "Invalid Kitsune2 Url Scheme: {oth}",

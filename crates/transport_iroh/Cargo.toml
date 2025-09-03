@@ -1,0 +1,29 @@
+[package]
+name = "kitsune2_transport_iroh"
+version.workspace = true
+description = "The iroh based transport implementation for kitsune2"
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kitsune2_transport_iroh"
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
+kitsune2_api = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing = { workspace = true }
+iroh = "0.91"
+url = { workspace = true }
+anyhow = "1"
+
+[dev-dependencies]
+kitsune2_core = { workspace = true }
+kitsune2_test_utils = { workspace = true }
+sbd-server = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

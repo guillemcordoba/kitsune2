@@ -381,6 +381,24 @@ impl CoreFetch {
                     .retain(|(_, a)| *a != peer_url);
             }
 
+            // After processing this request, check if the fetch queue is drained.
+            //
+            // Note that using flow control above could skip this step, so please only `continue`
+            // if it is safe to do so.
+            {
+                let mut lock = state.lock().expect("poisoned");
+                if lock.requests.is_empty() {
+                    // Notify all listeners that the fetch queue is drained.
+                    for notify in lock.notify_when_drained_senders.drain(..) {
+                        if notify.send(()).is_err() {
+                            tracing::warn!(
+                                "Failed to send notification on drained"
+                            );
+                        }
+                    }
+                }
+            }
+
             // Re-insert the fetch request into the queue after a delay.
             let outgoing_request_tx = outgoing_request_tx.clone();
 
