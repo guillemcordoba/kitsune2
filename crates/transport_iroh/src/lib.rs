@@ -244,18 +244,23 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let url = match get_current_peer_url(e.clone()) {
-                            Ok(u) => u,
-                            Err(err) => {
+                        let my_node_addr = match e.node_addr().get() {
+                            Some(n) => n,
+                            None => {
                                 tracing::error!(
-                                "Failed to get my endpoint peer url: {err}."
-                            );
+                                    "Failed to get my endpoint node address."
+                                );
                                 continue;
                             }
                         };
-                        let Some(url) = url else {
-                            tracing::error!("Endpoint has no peer url.");
-                            continue;
+                        let url = match node_addr_to_peer_url(my_node_addr) {
+                            Ok(u) => u,
+                            Err(err) => {
+                                tracing::error!(
+                                    "Failed to convert node address to peer url: {err}."
+                                );
+                                continue;
+                            }
                         };
                         tracing::info!("New listening address: {}.", url);
                         h.new_listening_address(url).await;
@@ -296,18 +301,23 @@ impl IrohTransport {
                             report.udp_v4
                         );
 
-                        let url = match get_current_peer_url(e.clone()) {
-                            Ok(u) => u,
-                            Err(err) => {
+                        let my_node_addr = match e.node_addr().get() {
+                            Some(n) => n,
+                            None => {
                                 tracing::error!(
-                                "Failed to get my endpoint peer url: {err}."
-                            );
+                                    "Failed to get my endpoint node address."
+                                );
                                 continue;
                             }
                         };
-                        let Some(url) = url else {
-                            tracing::error!("Endpoint has no peer url.");
-                            continue;
+                        let url = match node_addr_to_peer_url(my_node_addr) {
+                            Ok(u) => u,
+                            Err(err) => {
+                                tracing::error!(
+                                    "Failed to convert node address to peer url: {err}."
+                                );
+                                continue;
+                            }
                         };
                         tracing::info!("New listening address: {}.", url);
                         h.new_listening_address(url).await;
@@ -345,7 +355,7 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
     })?;
     let node_id = peer_url_to_node_id(peer_url.clone())?;
 
-    if peer_url.addr().contains("192") || peer_url.addr().contains("172") {
+    if url.domain().is_none() {
         let direct_address = url::Url::parse(
             format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
         )
@@ -355,7 +365,6 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
             .map_err(|err| K2Error::other_src("Invalid socket addrs", err))?
             .into_iter()
             .collect();
-        tracing::warn!("Direct address: {direct_addresses:?}.");
 
         Ok(NodeAddr {
             node_id,
@@ -413,88 +422,50 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
     match node_addr.relay_url {
         Some(relay_url) => to_peer_url(relay_url.into(), node_addr.node_id),
         None => {
-            let Some(direct_address) = node_addr
+            let direct_addresses = node_addr
                 .direct_addresses
                 .into_iter()
-                .collect::<Vec<SocketAddr>>()
-                .first()
-                .cloned()
-            else {
+                // .filter(|addr| {
+                //     addr.ip().to_string().contains("192")
+                //         || addr.ip().to_string().contains("172")
+                // })
+                .collect::<Vec<SocketAddr>>();
+            tracing::warn!("Direct addresses {direct_addresses:?}");
+            let Some(direct_address) = direct_addresses.first().cloned() else {
                 return Err(K2Error::other(
                     "node addr has no relay url and no direct addresses",
                 ));
             };
-            let Ok(url) =
-                url::Url::parse(format!("http://{}", direct_address).as_str())
-            else {
-                return Err(K2Error::other("Failed to parse direct addresses"));
-            };
+            let url = url::Url::parse(
+                format!(
+                    "http://{}:{}",
+                    direct_address.ip().to_string().replace("/", ""),
+                    direct_address.port()
+                )
+                .as_str(),
+            )
+            .map_err(|err| {
+                K2Error::other_src(
+                    "Failed to parse direct address into URL.",
+                    err,
+                )
+            })?;
             to_peer_url(url, node_addr.node_id)
         }
     }
 }
 
-fn get_current_peer_url(
-    endpoint: Arc<Endpoint>,
-) -> Result<Option<Url>, K2Error> {
-    if let Some(url) = endpoint.home_relay().get().first() {
-        let url = to_peer_url(url.clone().into(), endpoint.node_id())?;
-
-        Ok(Some(url))
-    } else {
-        tracing::warn!("No preferred relay, switching to direct addresses.");
-
-        let direct_addresses =
-            endpoint.direct_addresses().get().ok_or(K2Error::other(
-                "No direct addresses either, we can't communicate with anyone.",
-            ))?;
-
-        tracing::info!("List of direct addresses: {:?}", direct_addresses);
-        let direct_address = direct_addresses
-            .iter()
-            .find(|da| match da.typ {
-                iroh::endpoint::DirectAddrType::Local => {
-                    da.addr.ip().to_string().contains("192")
-                        || da.addr.ip().to_string().contains("172")
-                }
-                _ => false,
-            })
-            .ok_or(K2Error::other(
-                "No direct addresses either, we can't communicate with anyone.",
-            ))?;
-
-        let url = url::Url::parse(
-            format!(
-                "http://{}:{}",
-                direct_address.addr.ip().to_string().replace("/", ""),
-                direct_address.addr.port()
-            )
-            .as_str(),
-        )
-        .map_err(|err| {
-            K2Error::other_src("Failed to parse direct address into URL.", err)
-        })?;
-        tracing::debug!("Converting url {url} to kitsune2 peer url.");
-
-        let url = to_peer_url(url, endpoint.node_id())
-            .map_err(|err| K2Error::other_src("Invalid URL.", err))?;
-
-        Ok(Some(url))
-    }
-}
-
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
-        let url = match get_current_peer_url(self.endpoint.clone()) {
+        let my_node_addr = self.endpoint.node_addr().get()?;
+        let peer_url = match node_addr_to_peer_url(my_node_addr) {
             Ok(u) => u,
             Err(err) => {
-                tracing::error!("Failed to get peer URL: {err}.");
+                tracing::error!(
+                    "Failed to convert node address to peer url: {err}."
+                );
                 return None;
             }
-        };
-        let Some(peer_url) = url else {
-            tracing::error!("We have no peer URL.");
-            return None;
         };
 
         tracing::info!("My peer URL: {peer_url}.");
@@ -676,20 +647,20 @@ fn setup_incoming_listener(
             };
 
             let Some(remote_info) = endpoint.remote_info(node_id) else {
-                tracing::error!("Remote info error ");
+                tracing::error!("Remote info error.");
                 return;
             };
-            let Some(relay_url_info) = remote_info.relay_url else {
-                tracing::error!("Remote info error ");
-                return;
+            let node_addrs: NodeAddr = remote_info.into();
+            let peer = match node_addr_to_peer_url(node_addrs.clone()) {
+                Ok(u) => u,
+                Err(err) => {
+                    tracing::error!(
+                        "Could not convert remote info to peer url: {err:?}."
+                    );
+                    return;
+                }
             };
 
-            let Ok(peer) =
-                to_peer_url(relay_url_info.relay_url.into(), node_id)
-            else {
-                tracing::error!("Url from str error");
-                return;
-            };
             tracing::debug!("Incoming accept_uni received for {peer}.");
 
             let Ok(()) = handler.recv_data(peer.clone(), data.into()) else {
