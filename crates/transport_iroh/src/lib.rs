@@ -432,7 +432,10 @@ fn url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
         let direct_address = direct_addresses
             .iter()
             .find(|da| match da.typ {
-                iroh::endpoint::DirectAddrType::Local => true,
+                iroh::endpoint::DirectAddrType::Local => {
+                    da.addr.ip().to_string().contains("192")
+                        || da.addr.ip().to_string().contains("172")
+                }
                 _ => false,
             })
             .ok_or(K2Error::other(
