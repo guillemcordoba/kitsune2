@@ -96,6 +96,7 @@ const ALPN: &[u8] = b"kitsune2";
 struct PeerConnection {
     connection: Connection,
     recv_abort_handle: AbortHandle,
+    original_peer_url: Url,
 }
 
 struct IrohTransport {
@@ -147,6 +148,7 @@ impl IrohTransport {
 
             let recv_abort_handle = setup_incoming_listener(
                 self.endpoint.clone(),
+                self.connections.clone(),
                 &connection,
                 self.handler.clone(),
             );
@@ -160,6 +162,7 @@ impl IrohTransport {
                 PeerConnection {
                     connection: connection.clone(),
                     recv_abort_handle,
+                    original_peer_url: peer_url.clone(),
                 },
             );
             connection
@@ -565,12 +568,9 @@ impl TxImp for IrohTransport {
         Box::pin(async move {
             let connections = self.connections.lock().await;
             Ok(connections
-                .keys()
-                .filter_map(|node_id| {
-                    let remote_info =
-                        self.endpoint.remote_info(node_id.clone())?;
-
-                    node_addr_to_peer_url(remote_info.into()).ok()
+                .values()
+                .map(|peer_connection| {
+                    peer_connection.original_peer_url.clone()
                 })
                 .collect())
         })
@@ -599,19 +599,38 @@ async fn evt_task(
                 return;
             };
 
-            let recv_abort_handle =
-                setup_incoming_listener(endpoint, &connection, handler.clone());
+            let recv_abort_handle = setup_incoming_listener(
+                endpoint.clone(),
+                connections.clone(),
+                &connection,
+                handler.clone(),
+            );
             let mut connections = connections.lock().await;
             if let Some(c) = connections.get(&node_id) {
                 c.recv_abort_handle.abort();
                 c.connection.close(VarInt::from_u32(0), b"disconnected");
             }
+            let Some(remote_info) = endpoint.remote_info(node_id) else {
+                tracing::error!("Remote info error.");
+                return;
+            };
+            let node_addrs: NodeAddr = remote_info.into();
+            let peer_url = match node_addr_to_peer_url(node_addrs.clone()) {
+                Ok(u) => u,
+                Err(err) => {
+                    tracing::error!(
+                        "Could not convert remote info to peer url: {err:?}."
+                    );
+                    return;
+                }
+            };
 
             connections.insert(
                 node_id.clone(),
                 PeerConnection {
                     connection,
                     recv_abort_handle,
+                    original_peer_url: peer_url,
                 },
             );
         });
@@ -620,6 +639,7 @@ async fn evt_task(
 
 fn setup_incoming_listener(
     endpoint: Arc<Endpoint>,
+    connections: Arc<Mutex<BTreeMap<NodeId, PeerConnection>>>,
     connection: &Connection,
     handler: Arc<TxImpHnd>,
 ) -> tokio::task::AbortHandle {
@@ -641,20 +661,28 @@ fn setup_incoming_listener(
                 return;
             };
 
-            let Some(remote_info) = endpoint.remote_info(node_id) else {
-                tracing::error!("Remote info error.");
-                return;
-            };
-            let node_addrs: NodeAddr = remote_info.into();
-            let peer = match node_addr_to_peer_url(node_addrs.clone()) {
-                Ok(u) => u,
-                Err(err) => {
-                    tracing::error!(
-                        "Could not convert remote info to peer url: {err:?}."
-                    );
-                    return;
+            let connections = connections.lock().await;
+            let peer = match connections.get(&node_id) {
+                Some(peer_connection) => peer_connection.original_peer_url.clone(),
+                None => {
+                    let Some(remote_info) = endpoint.remote_info(node_id) else {
+                        tracing::error!("Remote info error.");
+                        return;
+                    };
+                    let node_addrs: NodeAddr = remote_info.into();
+                    let peer = match node_addr_to_peer_url(node_addrs.clone()) {
+                        Ok(u) => u,
+                        Err(err) => {
+                            tracing::error!(
+                                "Could not convert remote info to peer url: {err:?}."
+                            );
+                            return;
+                        }
+                    };
+                   peer
                 }
             };
+            drop(connections);
 
             tracing::debug!("Incoming accept_uni received for {peer}.");
 
