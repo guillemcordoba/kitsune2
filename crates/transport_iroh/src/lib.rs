@@ -347,7 +347,7 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
     let node_id = NodeId::try_from(decoded_peer_id.as_slice())
         .map_err(|err| K2Error::other_src("bad peer id", err))?;
 
-    if peer_url.addr().contains("192") || peer_url.addr().contains("172") {
+    if peer_url.addr().contains("192") || peer_url.addr().contains("172nope") {
         let direct_address = url::Url::parse(
             format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
         )
@@ -443,7 +443,7 @@ fn get_current_peer_url(
             .find(|da| match da.typ {
                 iroh::endpoint::DirectAddrType::Local => {
                     da.addr.ip().to_string().contains("192")
-                        || da.addr.ip().to_string().contains("172")
+                        || da.addr.ip().to_string().contains("172nope")
                 }
                 _ => false,
             })
