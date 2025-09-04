@@ -414,7 +414,9 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
     }
 }
 
-fn get_current_peer_url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
+fn get_current_peer_url(
+    endpoint: Arc<Endpoint>,
+) -> Result<Option<Url>, K2Error> {
     if let Some(url) = endpoint.home_relay().get().first() {
         let url = to_peer_url(url.clone().into(), endpoint.node_id())
             .expect("Invalid URL");
@@ -453,6 +455,7 @@ fn get_current_peer_url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error>
         .map_err(|err| {
             K2Error::other_src("Failed to parse direct address into URL.", err)
         })?;
+        tracing::warn!("Converting url {url} to kitsune2 peer url.");
 
         let url = to_peer_url(url, endpoint.node_id())
             .map_err(|err| K2Error::other_src("Invalid URL.", err))?;
@@ -463,9 +466,12 @@ fn get_current_peer_url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error>
 
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
-        let Ok(url) = get_current_peer_url(self.endpoint.clone()) else {
-            tracing::error!("Failed to get peer URL.");
-            return None;
+        let url = match get_current_peer_url(self.endpoint.clone()) {
+            Ok(u) => u,
+            Err(err) => {
+                tracing::error!("Failed to get peer URL: {err}.");
+                return None;
+            }
         };
         let Some(peer_url) = url else {
             tracing::error!("We have no peer URL.");
