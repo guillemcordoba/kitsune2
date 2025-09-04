@@ -239,11 +239,14 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let Ok(url) = get_current_peer_url(e.clone()) else {
-                            tracing::error!(
-                                "Failed to get my endpoint peer url."
+                        let url = match get_current_peer_url(e.clone()) {
+                            Ok(u) => u,
+                            Err(err) => {
+                                tracing::error!(
+                                "Failed to get my endpoint peer url: {err}."
                             );
-                            continue;
+                                continue;
+                            }
                         };
                         let Some(url) = url else {
                             tracing::error!("Endpoint has no peer url.");
@@ -288,11 +291,14 @@ impl IrohTransport {
                             report.udp_v4
                         );
 
-                        let Ok(url) = get_current_peer_url(e.clone()) else {
-                            tracing::error!(
-                                "Failed to get my endpoint peer url."
+                        let url = match get_current_peer_url(e.clone()) {
+                            Ok(u) => u,
+                            Err(err) => {
+                                tracing::error!(
+                                "Failed to get my endpoint peer url: {err}."
                             );
-                            continue;
+                                continue;
+                            }
                         };
                         let Some(url) = url else {
                             tracing::error!("Endpoint has no peer url.");
@@ -372,7 +378,10 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
 }
 
 fn to_peer_url(url: url::Url, node_id: NodeId) -> Result<Url, K2Error> {
-    let port = url.port().unwrap_or(443);
+    let port = match url.port() {
+        Some(_) => format!(""),
+        None => format!(":443"),
+    };
 
     let mut url_str = url.to_string();
     if let Some(s) = url_str.strip_suffix("./") {
@@ -382,8 +391,7 @@ fn to_peer_url(url: url::Url, node_id: NodeId) -> Result<Url, K2Error> {
         url_str = s.to_string();
     }
     let u = format!(
-        "{}:{port}/{}",
-        url_str,
+        "{url_str}{port}/{}",
         base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(node_id)
     );
     Url::from_str(u.as_str())
@@ -418,8 +426,7 @@ fn get_current_peer_url(
     endpoint: Arc<Endpoint>,
 ) -> Result<Option<Url>, K2Error> {
     if let Some(url) = endpoint.home_relay().get().first() {
-        let url = to_peer_url(url.clone().into(), endpoint.node_id())
-            .expect("Invalid URL");
+        let url = to_peer_url(url.clone().into(), endpoint.node_id())?;
 
         Ok(Some(url))
     } else {
@@ -455,7 +462,7 @@ fn get_current_peer_url(
         .map_err(|err| {
             K2Error::other_src("Failed to parse direct address into URL.", err)
         })?;
-        tracing::warn!("Converting url {url} to kitsune2 peer url.");
+        tracing::debug!("Converting url {url} to kitsune2 peer url.");
 
         let url = to_peer_url(url, endpoint.node_id())
             .map_err(|err| K2Error::other_src("Invalid URL.", err))?;
