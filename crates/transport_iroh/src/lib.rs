@@ -96,7 +96,7 @@ const ALPN: &[u8] = b"kitsune2";
 struct PeerConnection {
     connection: Connection,
     recv_abort_handle: AbortHandle,
-    original_peer_url: Url,
+    current_peer_url: Url,
 }
 
 struct IrohTransport {
@@ -114,9 +114,10 @@ impl IrohTransport {
         let node_id = peer_url_to_node_id(peer_url.clone())
             .map_err(|err| K2Error::other_src("bad peer url", err))?;
 
-        let connections = self.connections.lock().await;
+        let mut connections = self.connections.lock().await;
 
-        let connection = if let Some(connection) = connections.get(&node_id) {
+        let connection = if let Some(connection) = connections.get_mut(&node_id) {
+            connection.current_peer_url = peer_url.clone();
             connection.connection.clone()
         } else {
             drop(connections);
@@ -162,7 +163,7 @@ impl IrohTransport {
                 PeerConnection {
                     connection: connection.clone(),
                     recv_abort_handle,
-                    original_peer_url: peer_url.clone(),
+                    current_peer_url: peer_url.clone(),
                 },
             );
             connection
@@ -570,7 +571,7 @@ impl TxImp for IrohTransport {
             Ok(connections
                 .values()
                 .map(|peer_connection| {
-                    peer_connection.original_peer_url.clone()
+                    peer_connection.current_peer_url.clone()
                 })
                 .collect())
         })
@@ -630,7 +631,7 @@ async fn evt_task(
                 PeerConnection {
                     connection,
                     recv_abort_handle,
-                    original_peer_url: peer_url,
+                    current_peer_url: peer_url,
                 },
             );
         });
@@ -663,7 +664,7 @@ fn setup_incoming_listener(
 
             let connections = connections.lock().await;
             let peer = match connections.get(&node_id) {
-                Some(peer_connection) => peer_connection.original_peer_url.clone(),
+                Some(peer_connection) => peer_connection.current_peer_url.clone(),
                 None => {
                     let Some(remote_info) = endpoint.remote_info(node_id) else {
                         tracing::error!("Remote info error.");
