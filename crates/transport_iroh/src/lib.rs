@@ -239,7 +239,7 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let Ok(url) = url(e.clone()) else {
+                        let Ok(url) = get_current_peer_url(e.clone()) else {
                             tracing::error!(
                                 "Failed to get my endpoint peer url."
                             );
@@ -288,7 +288,7 @@ impl IrohTransport {
                             report.udp_v4
                         );
 
-                        let Ok(url) = url(e.clone()) else {
+                        let Ok(url) = get_current_peer_url(e.clone()) else {
                             tracing::error!(
                                 "Failed to get my endpoint peer url."
                             );
@@ -414,7 +414,7 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
     }
 }
 
-fn url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
+fn get_current_peer_url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
     if let Some(url) = endpoint.home_relay().get().first() {
         let url = to_peer_url(url.clone().into(), endpoint.node_id())
             .expect("Invalid URL");
@@ -444,8 +444,9 @@ fn url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
 
         let url = url::Url::parse(
             format!(
-                "http://{}",
-                direct_address.addr.ip().to_string().replace("/", "")
+                "http://{}:{}",
+                direct_address.addr.ip().to_string().replace("/", ""),
+                direct_address.addr.port()
             )
             .as_str(),
         )
@@ -462,7 +463,7 @@ fn url(endpoint: Arc<Endpoint>) -> Result<Option<Url>, K2Error> {
 
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
-        let Ok(url) = url(self.endpoint.clone()) else {
+        let Ok(url) = get_current_peer_url(self.endpoint.clone()) else {
             tracing::error!("Failed to get peer URL.");
             return None;
         };
