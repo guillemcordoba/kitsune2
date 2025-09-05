@@ -463,7 +463,9 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
                 .direct_addresses
                 .into_iter()
                 .collect::<Vec<SocketAddr>>();
-            let Some(direct_address) = direct_addresses.first().cloned() else {
+            let local_direct_address = direct_addresses.iter()
+                .find(|a| (a.to_string().contains("192") || a.to_string().contains("172")));
+            let Some(direct_address) = local_direct_address.or(direct_addresses.first()).cloned() else {
                 return Err(K2Error::other(
                     "node addr has no relay url and no direct addresses",
                 ));
