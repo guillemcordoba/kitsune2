@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use iroh::{
-    endpoint::{Connection, SendStream, StoppedError, VarInt},
+    endpoint::{Connection, DirectAddr, SendStream, StoppedError, VarInt},
     net_report::Report,
     Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl, Watcher,
 };
@@ -348,40 +348,63 @@ fn get_endpoint_peer_url(endpoint: Arc<Endpoint>) -> Result<Url, K2Error> {
             relay_url.clone().into()
         }
         _ => {
-            let local_ip_addresses = endpoint.bound_sockets();
+            let bound_sockets = endpoint.bound_sockets();
 
-            let local_address = if let Ok(local_ip) =
-                local_ip_address::local_ip()
-            {
-                tracing::warn!("Localip {local_ip} {local_ip_addresses:?}");
-                let bound_ip_adress = local_ip_addresses.iter().find(|addr| {
-                    addr.to_string().contains(&local_ip.to_string())
-                });
-
-                if let Some(bound_local_ip) = bound_ip_adress {
-                    Some(bound_local_ip)
-                } else {
-                    local_ip_addresses.first()
-                }
-            } else {
-                local_ip_addresses.first()
-            };
-            let Some(local_address) = local_address else {
-                return Err(K2Error::other(
-                    "We don't have any local addresses bound nor home relay: we can't connect to any peers."
-                ));
-            };
-            let Ok(url) = url::Url::parse(
-                format!(
-                    "http://{}:{}",
-                    local_address.ip(),
-                    local_address.port()
+            let url = match (
+                local_ip_address::local_ip(),
+                bound_sockets.first(),
+            ) {
+                (Ok(local_ip), Some(bound_socket)) => url::Url::parse(
+                    format!("http://{local_ip}:{}", bound_socket.port())
+                        .as_str(),
                 )
-                .as_str(),
-            ) else {
-                return Err(K2Error::other(
-                    "Parse error for local address: {local_address}.",
-                ));
+                .map_err(|err| {
+                    K2Error::other_src(
+                        "Failed to parse direct address into URL.",
+                        err,
+                    )
+                })?,
+                _ => {
+                    let direct_addresses =
+                        endpoint.direct_addresses().get().unwrap_or_default();
+                    let local_192_address = direct_addresses
+                        .iter()
+                        .find(|a| a.addr.to_string().starts_with("192."));
+                    let local_172_address = direct_addresses
+                        .iter()
+                        .find(|a| a.addr.to_string().starts_with("172."));
+                    let local_10_address = direct_addresses
+                        .iter()
+                        .find(|a| a.addr.to_string().starts_with("10."));
+                    let Some(direct_address) = local_192_address
+                        .or(local_172_address)
+                        .or(local_10_address)
+                        .or(direct_addresses.first())
+                        .cloned()
+                    else {
+                        return Err(K2Error::other(
+                            "node addr has no relay url and no direct addresses",
+                        ));
+                    };
+                    url::Url::parse(
+                        format!(
+                            "http://{}:{}",
+                            direct_address
+                                .addr
+                                .ip()
+                                .to_string()
+                                .replace("/", ""),
+                            direct_address.addr.port()
+                        )
+                        .as_str(),
+                    )
+                    .map_err(|err| {
+                        K2Error::other_src(
+                            "Failed to parse direct address into URL.",
+                            err,
+                        )
+                    })?
+                }
             };
             url
         }
