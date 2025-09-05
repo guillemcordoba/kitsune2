@@ -249,7 +249,7 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let mut my_node_addr = match node_address_without_nonlocal_direct_addresses(e.clone()).get() {
+                        let mut my_node_addr = match e.node_addr().get() {
                             Some(n) => n,
                             None => {
                                 tracing::error!(
@@ -307,12 +307,7 @@ impl IrohTransport {
                             None => {}
                         }
 
-                        tracing::warn!(
-                            "Network changed! Online status: {}.",
-                            report.udp_v4
-                        );
-
-                        let mut my_node_addr = match node_address_without_nonlocal_direct_addresses(e.clone()).get() {
+                        let mut my_node_addr = match e.node_addr().get() {
                             Some(n) => n,
                             None => {
                                 tracing::error!(
@@ -321,6 +316,12 @@ impl IrohTransport {
                                 continue;
                             }
                         };
+
+                        tracing::warn!(
+                            "Network changed! Online status: {}. My node address: {:?}.",
+                            report.udp_v4, my_node_addr
+                        );
+
                         if !report.udp_v4 {
                             my_node_addr.relay_url = None;
                         }
@@ -361,29 +362,6 @@ impl IrohTransport {
 
         Ok(out)
     }
-}
-
-fn node_address_without_nonlocal_direct_addresses(endpoint: Arc<Endpoint>) -> impl Watcher<Value = Option<NodeAddr>> {
-    let watch_addrs = endpoint.direct_addresses();
-    let watch_relay = endpoint.home_relay();
-    let node_id = endpoint.node_id();
-
-    watch_addrs
-        .or(watch_relay)
-        .map(move |(addrs, mut relays)| match addrs {
-            Some(addrs) => Some(NodeAddr::from_parts(
-                node_id,
-                relays.pop(),
-                addrs.into_iter().filter(|a| match a.typ {
-                    iroh::endpoint::DirectAddrType::Local => true,
-                    _ => false
-                }).map(|x| x.addr),
-            )),
-            None => relays.pop().map(|relay_url| {
-                NodeAddr::from_parts(node_id, Some(relay_url), std::iter::empty())
-            }),
-        })
-        .expect("watchable is alive - cannot be disconnected yet")
 }
 
 fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
