@@ -116,7 +116,8 @@ impl IrohTransport {
 
         let mut connections = self.connections.lock().await;
 
-        let connection = if let Some(connection) = connections.get_mut(&node_id) {
+        let connection = if let Some(connection) = connections.get_mut(&node_id)
+        {
             connection.current_peer_url = peer_url.clone();
             connection.connection.clone()
         } else {
@@ -248,7 +249,7 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let my_node_addr = match e.node_addr().get() {
+                        let mut my_node_addr = match e.node_addr().get() {
                             Some(n) => n,
                             None => {
                                 tracing::error!(
@@ -257,6 +258,12 @@ impl IrohTransport {
                                 continue;
                             }
                         };
+                        if let Some(net_report) = e.net_report().get() {
+                            if !net_report.udp_v4 {
+                                my_node_addr.relay_url = None;
+                            }
+                        }
+                        
                         let url = match node_addr_to_peer_url(my_node_addr) {
                             Ok(u) => u,
                             Err(err) => {
@@ -305,7 +312,7 @@ impl IrohTransport {
                             report.udp_v4
                         );
 
-                        let my_node_addr = match e.node_addr().get() {
+                        let mut my_node_addr = match e.node_addr().get() {
                             Some(n) => n,
                             None => {
                                 tracing::error!(
@@ -314,6 +321,9 @@ impl IrohTransport {
                                 continue;
                             }
                         };
+                        if !report.udp_v4 {
+                            my_node_addr.relay_url = None;
+                        }
                         let url = match node_addr_to_peer_url(my_node_addr) {
                             Ok(u) => u,
                             Err(err) => {
@@ -570,9 +580,7 @@ impl TxImp for IrohTransport {
             let connections = self.connections.lock().await;
             Ok(connections
                 .values()
-                .map(|peer_connection| {
-                    peer_connection.current_peer_url.clone()
-                })
+                .map(|peer_connection| peer_connection.current_peer_url.clone())
                 .collect())
         })
     }
