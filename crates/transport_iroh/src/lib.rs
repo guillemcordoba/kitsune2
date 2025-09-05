@@ -347,7 +347,7 @@ fn get_endpoint_peer_url(endpoint: Arc<Endpoint>) -> Result<Url, K2Error> {
             let local_ip_addresses = endpoint.bound_sockets();
 
             let local_address = if let Ok(local_ip) = local_ip_address::local_ip() {
-                tracing::warn!("Localip {local_ip}");
+                tracing::warn!("Localip {local_ip} {local_ip_addresses:?}");
                 let bound_ip_adress = local_ip_addresses
                     .iter().find(|addr| addr.to_string().contains(&local_ip.to_string()));
         
