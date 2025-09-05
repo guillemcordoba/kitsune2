@@ -249,26 +249,12 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        let mut my_node_addr = match node_address_without_nonlocal_direct_addresses(e.clone()).get() {
-                            Some(n) => n,
-                            None => {
-                                tracing::error!(
-                                    "Failed to get my endpoint node address."
-                                );
-                                continue;
-                            }
-                        };
-                        if let Some(net_report) = e.net_report().get() {
-                            if !net_report.udp_v4 {
-                                my_node_addr.relay_url = None;
-                            }
-                        }
                         
-                        let url = match node_addr_to_peer_url(my_node_addr) {
+                        let url = match get_endpoint_peer_url(e.clone()) {
                             Ok(u) => u,
                             Err(err) => {
                                 tracing::error!(
-                                    "Failed to convert node address to peer url: {err}."
+                                    "Failed to get my endpoint peer url: {err}."
                                 );
                                 continue;
                             }
@@ -294,7 +280,9 @@ impl IrohTransport {
             loop {
                 match e.net_report().updated().await {
                     Ok(Some(report)) => {
+
                         tracing::info!("New network report: {report:?}.");
+
                         let lr = maybe_last_report.clone();
                         maybe_last_report = Some(report.clone());
 
@@ -307,30 +295,15 @@ impl IrohTransport {
                             None => {}
                         }
 
-                        let mut my_node_addr = match node_address_without_nonlocal_direct_addresses(e.clone()).get() {
-                            Some(n) => n,
-                            None => {
-                                tracing::error!(
-                                    "Failed to get my endpoint node address."
-                                );
-                                continue;
-                            }
-                        };
-
                         tracing::warn!(
-                            "Network changed! Online status: {}. My node address: {:?}.",
-                            report.udp_v4, my_node_addr
+                            "Network changed! Online status: {}.",
+                            report.udp_v4, 
                         );
 
-                        if !report.udp_v4 {
-                            my_node_addr.relay_url = None;
-                        }
-                        let url = match node_addr_to_peer_url(my_node_addr) {
-                            Ok(u) => u,
+                        let url = match get_endpoint_peer_url(e.clone()) {
+                            Ok(url) => url,
                             Err(err) => {
-                                tracing::error!(
-                                    "Failed to convert node address to peer url: {err}."
-                                );
+                                tracing::error!("Failed to get my endpoint peer url: {err:?}.");
                                 continue;
                             }
                         };
@@ -364,27 +337,38 @@ impl IrohTransport {
     }
 }
 
-fn node_address_without_nonlocal_direct_addresses(endpoint: Arc<Endpoint>) -> impl Watcher<Value = Option<NodeAddr>> {
-    let watch_addrs = endpoint.direct_addresses();
-    let watch_relay = endpoint.home_relay();
-    let node_id = endpoint.node_id();
+fn get_endpoint_peer_url(endpoint: Arc<Endpoint>) -> Result<Url, K2Error> {
+    let report = endpoint.net_report().get();
+    let relays = endpoint.home_relay().get().first().cloned();
+    let url: url::Url = match (relays, report) {
+        (Some(relay_url), None) => relay_url.clone().into(),
+        (Some(relay_url), Some(report)) if report.udp_v4 => relay_url.clone().into(),
+        _ => {
+            let local_ip_addresses = endpoint.bound_sockets();
 
-    watch_addrs
-        .or(watch_relay)
-        .map(move |(addrs, mut relays)| match addrs {
-            Some(addrs) => Some(NodeAddr::from_parts(
-                node_id,
-                relays.pop(),
-                addrs.into_iter().filter(|a| match a.typ {
-                    iroh::endpoint::DirectAddrType::Local => true,
-                    _ => false
-                }).map(|x| x.addr),
-            )),
-            None => relays.pop().map(|relay_url| {
-                NodeAddr::from_parts(node_id, Some(relay_url), std::iter::empty())
-            }),
-        })
-        .expect("watchable is alive - cannot be disconnected yet")
+            let local_address = if let Ok(local_ip) = local_ip_address::local_ip() {
+                tracing::warn!("Localip {local_ip}");
+                let bound_ip_adress = local_ip_addresses
+                    .iter().find(|addr| addr.to_string().contains(&local_ip.to_string()));
+        
+                if let Some(bound_local_ip) = bound_ip_adress {
+                    Some(bound_local_ip)
+                } else {
+                    local_ip_addresses.first()
+                }
+            } else {
+                    local_ip_addresses.first()
+            };
+            let Some(local_address ) = local_address else {
+                return Err(K2Error::other("We don't have any local addresses bound nor home relay: we can't connect to any peers."));
+            };
+            let Ok(url) = url::Url::parse(format!("http://{}:{}", local_address.ip(), local_address.port()).as_str()) else {
+                return Err(K2Error::other("Parse error for local address: {local_address}."));
+            };
+            url
+        }
+    };
+    to_peer_url(url.clone().into(), endpoint.node_id())
 }
 
 fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
