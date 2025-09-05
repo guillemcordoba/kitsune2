@@ -22,7 +22,6 @@ struct Args {
     nick: String,
 }
 
-
 #[tokio::main]
 async fn main() {
     let pid = std::process::id();

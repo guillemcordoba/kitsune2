@@ -177,7 +177,9 @@ impl IrohTransport {
                 Ok(s)
             }
             Err(err) => {
-                tracing::info!("open_uni() with {peer_url} failed: {err:?}. Marking {peer_url} as unresponsive.");
+                tracing::info!(
+                    "open_uni() with {peer_url} failed: {err:?}. Marking {peer_url} as unresponsive."
+                );
                 self.handler
                     .set_unresponsive(peer_url.clone(), Timestamp::now())
                     .await?;
@@ -249,7 +251,6 @@ impl IrohTransport {
             loop {
                 match e.home_relay().updated().await {
                     Ok(_) => {
-                        
                         let url = match get_endpoint_peer_url(e.clone()) {
                             Ok(u) => u,
                             Err(err) => {
@@ -297,7 +298,7 @@ impl IrohTransport {
 
                         tracing::warn!(
                             "Network changed! Online status: {}.",
-                            report.udp_v4, 
+                            report.udp_v4
                         );
 
                         let url = match get_endpoint_peer_url(e.clone()) {
@@ -307,7 +308,8 @@ impl IrohTransport {
                                 continue;
                             }
                         };
-                        tracing::info!("New listening address: {}.", url);
+
+                        tracing::info!("New listening address: {}.", url) ;
                         h.new_listening_address(url).await;
                     }
                     Ok(None) => {}
@@ -342,28 +344,44 @@ fn get_endpoint_peer_url(endpoint: Arc<Endpoint>) -> Result<Url, K2Error> {
     let relays = endpoint.home_relay().get().first().cloned();
     let url: url::Url = match (relays, report) {
         (Some(relay_url), None) => relay_url.clone().into(),
-        (Some(relay_url), Some(report)) if report.udp_v4 => relay_url.clone().into(),
+        (Some(relay_url), Some(report)) if report.udp_v4 => {
+            relay_url.clone().into()
+        }
         _ => {
             let local_ip_addresses = endpoint.bound_sockets();
 
-            let local_address = if let Ok(local_ip) = local_ip_address::local_ip() {
+            let local_address = if let Ok(local_ip) =
+                local_ip_address::local_ip()
+            {
                 tracing::warn!("Localip {local_ip} {local_ip_addresses:?}");
-                let bound_ip_adress = local_ip_addresses
-                    .iter().find(|addr| addr.to_string().contains(&local_ip.to_string()));
-        
+                let bound_ip_adress = local_ip_addresses.iter().find(|addr| {
+                    addr.to_string().contains(&local_ip.to_string())
+                });
+
                 if let Some(bound_local_ip) = bound_ip_adress {
                     Some(bound_local_ip)
                 } else {
                     local_ip_addresses.first()
                 }
             } else {
-                    local_ip_addresses.first()
+                local_ip_addresses.first()
             };
-            let Some(local_address ) = local_address else {
-                return Err(K2Error::other("We don't have any local addresses bound nor home relay: we can't connect to any peers."));
+            let Some(local_address) = local_address else {
+                return Err(K2Error::other(
+                    "We don't have any local addresses bound nor home relay: we can't connect to any peers."
+                ));
             };
-            let Ok(url) = url::Url::parse(format!("http://{}:{}", local_address.ip(), local_address.port()).as_str()) else {
-                return Err(K2Error::other("Parse error for local address: {local_address}."));
+            let Ok(url) = url::Url::parse(
+                format!(
+                    "http://{}:{}",
+                    local_address.ip(),
+                    local_address.port()
+                )
+                .as_str(),
+            ) else {
+                return Err(K2Error::other(
+                    "Parse error for local address: {local_address}.",
+                ));
             };
             url
         }
@@ -448,16 +466,21 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
                 .direct_addresses
                 .into_iter()
                 .collect::<Vec<SocketAddr>>();
-            let local_192_address = direct_addresses.iter()
+            let local_192_address = direct_addresses
+                .iter()
                 .find(|a| a.to_string().starts_with("192."));
-            let local_172_address = direct_addresses.iter()
+            let local_172_address = direct_addresses
+                .iter()
                 .find(|a| a.to_string().starts_with("172."));
-            let local_10_address = direct_addresses.iter()
+            let local_10_address = direct_addresses
+                .iter()
                 .find(|a| a.to_string().starts_with("10."));
-            let Some(direct_address) = local_192_address.or(local_172_address)
+            let Some(direct_address) = local_192_address
+                .or(local_172_address)
                 .or(local_10_address)
                 .or(direct_addresses.first())
-                .cloned() else {
+                .cloned()
+            else {
                 return Err(K2Error::other(
                     "node addr has no relay url and no direct addresses",
                 ));
@@ -483,13 +506,10 @@ fn node_addr_to_peer_url(node_addr: NodeAddr) -> Result<Url, K2Error> {
 
 impl TxImp for IrohTransport {
     fn url(&self) -> Option<Url> {
-        let my_node_addr = self.endpoint.node_addr().get()?;
-        let peer_url = match node_addr_to_peer_url(my_node_addr) {
+        let peer_url = match get_endpoint_peer_url(self.endpoint.clone()) {
             Ok(u) => u,
             Err(err) => {
-                tracing::error!(
-                    "Failed to convert node address to peer url: {err}."
-                );
+                tracing::error!("Failed to get my endpoint peer url: {err}.");
                 return None;
             }
         };
