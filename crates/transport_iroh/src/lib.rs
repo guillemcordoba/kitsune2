@@ -96,6 +96,7 @@ const ALPN: &[u8] = b"kitsune2";
 struct PeerConnection {
     connection: Connection,
     recv_abort_handle: AbortHandle,
+    opened_at_s: u64,
 }
 
 struct IrohTransport {
@@ -115,9 +116,7 @@ impl IrohTransport {
 
         let connections = self.connections.lock().await;
 
-        let connection = if let Some(connection) =
-            connections.get(&node_addr)
-        {
+        let connection = if let Some(connection) = connections.get(&node_addr) {
             connection.connection.clone()
         } else {
             drop(connections);
@@ -157,6 +156,8 @@ impl IrohTransport {
                 PeerConnection {
                     connection: connection.clone(),
                     recv_abort_handle,
+                    opened_at_s: Timestamp::now().as_micros() as u64
+                        / 1_000_000,
                 },
             );
             connection
@@ -482,15 +483,21 @@ impl TxImp for IrohTransport {
                 peer_urls: peer_urls.into_iter().collect(),
                 connections: connections
                     .iter()
-                    .map(|(peer_addr, conn)| TransportConnectionStats {
-                        pub_key: base64::prelude::BASE64_URL_SAFE_NO_PAD
-                            .encode(peer_addr.node_id),
-                        send_message_count: 0,
-                        send_bytes: 0,
-                        recv_message_count: 0,
-                        recv_bytes: 0,
-                        opened_at_s: 0,
-                        is_webrtc: false,
+                    .map(|(node_addr, conn)| {
+                        let connection_stats = conn.connection.stats();
+                        let sent = connection_stats.udp_tx;
+                        let recv = connection_stats.udp_rx;
+
+                        TransportConnectionStats {
+                            pub_key: base64::prelude::BASE64_URL_SAFE_NO_PAD
+                                .encode(node_addr.node_id),
+                            send_message_count: sent.datagrams,
+                            send_bytes: sent.bytes,
+                            recv_message_count: recv.datagrams,
+                            recv_bytes: recv.bytes,
+                            opened_at_s: conn.opened_at_s,
+                            is_webrtc: false,
+                        }
                     })
                     .collect(),
             })
@@ -538,6 +545,8 @@ async fn evt_task(
                 PeerConnection {
                     connection,
                     recv_abort_handle,
+                    opened_at_s: Timestamp::now().as_micros() as u64
+                        / 1_000_000,
                 },
             );
         });
