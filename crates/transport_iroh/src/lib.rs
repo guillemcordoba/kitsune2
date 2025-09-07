@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use iroh::{
-    endpoint::{Connection, DirectAddr, SendStream, StoppedError, VarInt},
+    endpoint::{Connection, SendStream, StoppedError, VarInt},
     net_report::Report,
     Endpoint, NodeAddr, NodeId, RelayMap, RelayMode, RelayUrl, Watcher,
 };
@@ -97,6 +97,7 @@ struct PeerConnection {
     connection: Connection,
     recv_abort_handle: AbortHandle,
     current_peer_url: Url,
+    opened_at_s: u64,
 }
 
 struct IrohTransport {
@@ -165,6 +166,8 @@ impl IrohTransport {
                     connection: connection.clone(),
                     recv_abort_handle,
                     current_peer_url: peer_url.clone(),
+                    opened_at_s: Timestamp::now().as_micros() as u64
+                        / 1_000_000,
                 },
             );
             connection
@@ -620,15 +623,21 @@ impl TxImp for IrohTransport {
                 peer_urls: peer_urls.into_iter().collect(),
                 connections: connections
                     .iter()
-                    .map(|(node_id, conn)| TransportConnectionStats {
-                        pub_key: base64::prelude::BASE64_URL_SAFE_NO_PAD
-                            .encode(node_id),
-                        send_message_count: 0,
-                        send_bytes: 0,
-                        recv_message_count: 0,
-                        recv_bytes: 0,
-                        opened_at_s: 0,
-                        is_webrtc: false,
+                    .map(|(node_id, conn)| {
+                        let connection_stats = conn.connection.stats();
+                        let sent = connection_stats.udp_tx;
+                        let recv = connection_stats.udp_rx;
+
+                        TransportConnectionStats {
+                            pub_key: base64::prelude::BASE64_URL_SAFE_NO_PAD
+                                .encode(node_id),
+                            send_message_count: sent.datagrams,
+                            send_bytes: sent.bytes,
+                            recv_message_count: recv.datagrams,
+                            recv_bytes: recv.bytes,
+                            opened_at_s: conn.opened_at_s,
+                            is_webrtc: false,
+                        }
                     })
                     .collect(),
             })
@@ -700,6 +709,8 @@ async fn evt_task(
                     connection,
                     recv_abort_handle,
                     current_peer_url: peer_url,
+                    opened_at_s: Timestamp::now().as_micros() as u64
+                        / 1_000_000,
                 },
             );
         });
