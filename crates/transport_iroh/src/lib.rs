@@ -102,7 +102,7 @@ struct PeerConnection {
 struct IrohTransport {
     handler: Arc<TxImpHnd>,
     endpoint: Arc<Endpoint>,
-    connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
+    connections: Arc<Mutex<BTreeMap<NodeId, PeerConnection>>>,
     tasks: Vec<AbortHandle>,
 }
 
@@ -111,18 +111,18 @@ impl IrohTransport {
         &self,
         peer_url: Url,
     ) -> Result<SendStream, K2Error> {
-        let node_addr = peer_url_to_node_addr(peer_url.clone())
+        let node_id = peer_url_to_node_id(peer_url.clone())
             .map_err(|err| K2Error::other_src("bad peer url", err))?;
 
         let connections = self.connections.lock().await;
 
-        let connection = if let Some(connection) = connections.get(&node_addr) {
+        let connection = if let Some(connection) = connections.get(&node_id) {
             connection.connection.clone()
         } else {
             drop(connections);
             let connection = match self
                 .endpoint
-                .connect(node_addr.clone(), ALPN)
+                .connect(node_id.clone(), ALPN)
                 .await
             {
                 Ok(c) => c,
@@ -147,12 +147,12 @@ impl IrohTransport {
                 self.handler.clone(),
             );
             let mut connections = self.connections.lock().await;
-            if let Some(c) = connections.get(&node_addr) {
+            if let Some(c) = connections.get(&node_id) {
                 c.recv_abort_handle.abort();
                 c.connection.close(VarInt::from_u32(0), b"disconnected");
             }
             connections.insert(
-                node_addr.clone(),
+                node_id.clone(),
                 PeerConnection {
                     connection: connection.clone(),
                     recv_abort_handle,
@@ -332,6 +332,39 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
     let url = url::Url::parse(peer_url.as_str()).map_err(|err| {
         K2Error::other(format!("Failed to parse peer url: {err:?}"))
     })?;
+    let node_id = peer_url_to_node_id(peer_url.clone())?;
+
+    if url.domain().is_none() {
+        let direct_address = url::Url::parse(
+            format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
+        )
+        .map_err(|err| K2Error::other_src("Bad addr", err))?;
+        let direct_addresses: BTreeSet<SocketAddr> = direct_address
+            .socket_addrs(|| None)
+            .map_err(|err| K2Error::other_src("Invalid socket addrs", err))?
+            .into_iter()
+            .collect();
+
+        Ok(NodeAddr {
+            node_id,
+            relay_url: None,
+            direct_addresses,
+        })
+    } else {
+        let relay_url = url::Url::parse(
+            format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
+        )
+        .map_err(|err| K2Error::other_src("Bad addr", err))?;
+
+        Ok(NodeAddr {
+            node_id,
+            relay_url: Some(RelayUrl::from(relay_url)),
+            direct_addresses: BTreeSet::new(),
+        })
+    }
+}
+
+fn peer_url_to_node_id(peer_url: Url) -> Result<NodeId, K2Error> {
     let Some(peer_id) = peer_url.peer_id() else {
         return Err(K2Error::other("empty peer url"));
     };
@@ -341,16 +374,7 @@ fn peer_url_to_node_addr(peer_url: Url) -> Result<NodeAddr, K2Error> {
     let node_id = NodeId::try_from(decoded_peer_id.as_slice())
         .map_err(|err| K2Error::other_src("bad peer id", err))?;
 
-    let relay_url = url::Url::parse(
-        format!("{}://{}", url.scheme(), peer_url.addr()).as_str(),
-    )
-    .map_err(|err| K2Error::other_src("Bad addr", err))?;
-
-    Ok(NodeAddr {
-        node_id,
-        relay_url: Some(RelayUrl::from(relay_url)),
-        direct_addresses: BTreeSet::new(),
-    })
+    Ok(node_id)
 }
 
 fn to_peer_url(url: url::Url, node_id: NodeId) -> Result<Url, K2Error> {
@@ -415,17 +439,17 @@ impl TxImp for IrohTransport {
     ) -> BoxFut<'_, ()> {
         Box::pin(async move {
             tracing::debug!("Disconnecting from {peer}.");
-            let Ok(addr) = peer_url_to_node_addr(peer) else {
+            let Ok(node_id) = peer_url_to_node_id(peer) else {
                 tracing::error!("Bad peer url to node addr");
                 return;
             };
             let mut connections = self.connections.lock().await;
-            if let Some(peer_connection) = connections.get(&addr) {
+            if let Some(peer_connection) = connections.get(&node_id) {
                 peer_connection
                     .connection
                     .close(VarInt::from_u32(0), b"disconnected");
                 peer_connection.recv_abort_handle.abort();
-                connections.remove(&addr);
+                connections.remove(&node_id);
             }
             ()
         })
@@ -452,12 +476,12 @@ impl TxImp for IrohTransport {
                     .await?;
                 if let StoppedError::ConnectionLost(_) = err {
                     let mut connections = self.connections.lock().await;
-                    let addr = peer_url_to_node_addr(peer.clone())?;
-                    if let Some(connection) = connections.get(&addr) {
+                    let node_id = peer_url_to_node_id(peer.clone())?;
+                    if let Some(connection) = connections.get(&node_id) {
                         connection
                             .connection
                             .close(VarInt::from_u32(0), b"disconnected");
-                        connections.remove(&addr);
+                        connections.remove(&node_id);
                     }
                 }
                 return Err(K2Error::other_src("error stopping", err));
@@ -483,14 +507,14 @@ impl TxImp for IrohTransport {
                 peer_urls: peer_urls.into_iter().collect(),
                 connections: connections
                     .iter()
-                    .map(|(node_addr, conn)| {
+                    .map(|(node_id, conn)| {
                         let connection_stats = conn.connection.stats();
                         let sent = connection_stats.udp_tx;
                         let recv = connection_stats.udp_rx;
 
                         TransportConnectionStats {
                             pub_key: base64::prelude::BASE64_URL_SAFE_NO_PAD
-                                .encode(node_addr.node_id),
+                                .encode(node_id),
                             send_message_count: sent.datagrams,
                             send_bytes: sent.bytes,
                             recv_message_count: recv.datagrams,
@@ -506,7 +530,7 @@ impl TxImp for IrohTransport {
 }
 
 async fn evt_task(
-    connections: Arc<Mutex<BTreeMap<NodeAddr, PeerConnection>>>,
+    connections: Arc<Mutex<BTreeMap<NodeId, PeerConnection>>>,
     handler: Arc<TxImpHnd>,
     endpoint: Arc<Endpoint>,
 ) {
@@ -527,21 +551,16 @@ async fn evt_task(
                 return;
             };
 
-            let Some(remote_info) = endpoint.remote_info(node_id) else {
-                tracing::error!("Remote info error ");
-                return;
-            };
-            let node_addr: NodeAddr = remote_info.into();
             let recv_abort_handle =
                 setup_incoming_listener(endpoint, &connection, handler.clone());
             let mut connections = connections.lock().await;
-            if let Some(c) = connections.get(&node_addr) {
+            if let Some(c) = connections.get(&node_id) {
                 c.recv_abort_handle.abort();
                 c.connection.close(VarInt::from_u32(0), b"disconnected");
             }
 
             connections.insert(
-                node_addr.clone(),
+                node_id.clone(),
                 PeerConnection {
                     connection,
                     recv_abort_handle,
