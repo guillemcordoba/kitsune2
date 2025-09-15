@@ -113,6 +113,8 @@ impl IrohTransport {
     ) -> Result<SendStream, K2Error> {
         let node_id = peer_url_to_node_id(peer_url.clone())
             .map_err(|err| K2Error::other_src("bad peer url", err))?;
+        let node_addr = peer_url_to_node_addr(peer_url.clone())
+            .map_err(|err| K2Error::other_src("bad peer url", err))?;
 
         let connections = self.connections.lock().await;
 
@@ -122,7 +124,7 @@ impl IrohTransport {
             drop(connections);
             let connection = match self
                 .endpoint
-                .connect(node_id.clone(), ALPN)
+                .connect(node_addr.clone(), ALPN)
                 .await
             {
                 Ok(c) => c,
