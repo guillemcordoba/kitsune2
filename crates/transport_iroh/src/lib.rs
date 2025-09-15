@@ -497,8 +497,11 @@ impl TxImp for IrohTransport {
             let connections = self.connections.lock().await;
             let peer_urls: BTreeSet<Url> = connections
                 .iter()
-                .filter_map(|(node_addr, _)| {
-                    node_addr_to_peer_url(node_addr.clone()).ok()
+                .filter_map(|(node_id, _)| {
+                    let remote_info =
+                        self.endpoint.remote_info(node_id.clone())?;
+
+                    node_addr_to_peer_url(remote_info.into()).ok()
                 })
                 .collect();
 
