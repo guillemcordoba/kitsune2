@@ -514,6 +514,20 @@ impl TxImp for IrohTransport {
                     .iter()
                     .map(|(node_id, conn)| {
                         let connection_stats = conn.connection.stats();
+                        let is_webrtc = match self
+                            .endpoint
+                            .conn_type(node_id.clone())
+                        {
+                            None => false,
+                            Some(mut connection_type) => {
+                                match connection_type.get() {
+                                    iroh::endpoint::ConnectionType::Direct(
+                                        _,
+                                    ) => true,
+                                    _ => false,
+                                }
+                            }
+                        };
                         let sent = connection_stats.udp_tx;
                         let recv = connection_stats.udp_rx;
 
@@ -525,7 +539,7 @@ impl TxImp for IrohTransport {
                             recv_message_count: recv.datagrams,
                             recv_bytes: recv.bytes,
                             opened_at_s: conn.opened_at_s,
-                            is_webrtc: false,
+                            is_webrtc,
                         }
                     })
                     .collect(),
