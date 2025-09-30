@@ -12,10 +12,10 @@ pub trait SpaceHandler: 'static + Send + Sync + std::fmt::Debug {
     fn recv_notify(
         &self,
         from_peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         data: bytes::Bytes,
     ) -> K2Result<()> {
-        drop((from_peer, space, data));
+        drop((from_peer, space_id, data));
         Ok(())
     }
 }
@@ -56,6 +56,9 @@ pub trait Space: 'static + Send + Sync + std::fmt::Debug {
 
     /// Get a reference to the peer meta store being used by this space.
     fn peer_meta_store(&self) -> &DynPeerMetaStore;
+
+    /// Get a reference to the blocks module being used by this space.
+    fn blocks(&self) -> &DynBlocks;
 
     /// The URL that this space is currently reachable at, if any.
     fn current_url(&self) -> Option<Url>;
@@ -116,7 +119,8 @@ pub trait SpaceFactory: 'static + Send + Sync + std::fmt::Debug {
         &self,
         builder: Arc<builder::Builder>,
         handler: DynSpaceHandler,
-        space: SpaceId,
+        space_id: SpaceId,
+        report: DynReport,
         tx: transport::DynTransport,
     ) -> BoxFut<'static, K2Result<DynSpace>>;
 }

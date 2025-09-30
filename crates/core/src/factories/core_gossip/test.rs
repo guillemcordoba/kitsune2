@@ -39,7 +39,15 @@ async fn create_gossip_instance() {
             space_id.clone(),
             builder
                 .peer_store
-                .create(builder.clone(), space_id.clone())
+                .create(
+                    builder.clone(),
+                    space_id.clone(),
+                    builder
+                        .blocks
+                        .create(builder.clone(), space_id.clone())
+                        .await
+                        .unwrap(),
+                )
                 .await
                 .unwrap(),
             builder
@@ -55,6 +63,11 @@ async fn create_gossip_instance() {
                 .create(
                     builder.clone(),
                     space_id.clone(),
+                    builder
+                        .report
+                        .create(builder.clone(), tx.clone())
+                        .await
+                        .unwrap(),
                     op_store.clone(),
                     peer_meta_store,
                     tx.clone(),

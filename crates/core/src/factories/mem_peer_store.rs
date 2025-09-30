@@ -2,7 +2,8 @@
 
 use kitsune2_api::*;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// MemPeerStore configuration types.
 mod config {
@@ -78,13 +79,14 @@ impl PeerStoreFactory for MemPeerStoreFactory {
     fn create(
         &self,
         builder: Arc<Builder>,
-        _space: SpaceId,
+        _space_id: SpaceId,
+        blocks: DynBlocks,
     ) -> BoxFut<'static, K2Result<DynPeerStore>> {
         Box::pin(async move {
             let config: MemPeerStoreModConfig =
                 builder.config.get_module_config()?;
             let out: DynPeerStore =
-                Arc::new(MemPeerStore::new(config.mem_peer_store));
+                Arc::new(MemPeerStore::new(config.mem_peer_store, blocks));
             Ok(out)
         })
     }
@@ -99,8 +101,12 @@ impl std::fmt::Debug for MemPeerStore {
 }
 
 impl MemPeerStore {
-    pub fn new(config: MemPeerStoreConfig) -> Self {
-        Self(Mutex::new(Inner::new(config, std::time::Instant::now())))
+    pub fn new(config: MemPeerStoreConfig, blocks: DynBlocks) -> Self {
+        Self(Mutex::new(Inner::new(
+            config,
+            std::time::Instant::now(),
+            blocks,
+        )))
     }
 }
 
@@ -109,29 +115,34 @@ impl PeerStore for MemPeerStore {
         &self,
         agent_list: Vec<Arc<AgentInfoSigned>>,
     ) -> BoxFut<'_, K2Result<()>> {
-        self.0.lock().unwrap().insert(agent_list);
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move { self.0.lock().await.insert(agent_list).await })
+    }
+
+    fn remove(&self, agent_id: AgentId) -> BoxFut<'_, K2Result<()>> {
+        Box::pin(async move {
+            self.0.lock().await.remove(&agent_id);
+            Ok(())
+        })
     }
 
     fn get(
         &self,
         agent: AgentId,
     ) -> BoxFut<'_, K2Result<Option<Arc<AgentInfoSigned>>>> {
-        let r = self.0.lock().unwrap().get(agent);
-        Box::pin(async move { Ok(r) })
+        Box::pin(async move { Ok(self.0.lock().await.get(agent)) })
     }
 
     fn get_all(&self) -> BoxFut<'_, K2Result<Vec<Arc<AgentInfoSigned>>>> {
-        let r = self.0.lock().unwrap().get_all();
-        Box::pin(async move { Ok(r) })
+        Box::pin(async move { Ok(self.0.lock().await.get_all()) })
     }
 
     fn get_by_overlapping_storage_arc(
         &self,
         arc: DhtArc,
     ) -> BoxFut<'_, K2Result<Vec<Arc<AgentInfoSigned>>>> {
-        let r = self.0.lock().unwrap().get_by_overlapping_storage_arc(arc);
-        Box::pin(async move { Ok(r) })
+        Box::pin(async move {
+            Ok(self.0.lock().await.get_by_overlapping_storage_arc(arc))
+        })
     }
 
     fn get_near_location(
@@ -139,8 +150,16 @@ impl PeerStore for MemPeerStore {
         loc: u32,
         limit: usize,
     ) -> BoxFut<'_, K2Result<Vec<Arc<AgentInfoSigned>>>> {
-        let r = self.0.lock().unwrap().get_near_location(loc, limit);
-        Box::pin(async move { Ok(r) })
+        Box::pin(async move {
+            Ok(self.0.lock().await.get_near_location(loc, limit))
+        })
+    }
+
+    fn get_by_url(
+        &self,
+        peer_url: Url,
+    ) -> BoxFut<'_, K2Result<Vec<Arc<AgentInfoSigned>>>> {
+        Box::pin(async move { Ok(self.0.lock().await.get_by_url(&peer_url)) })
     }
 }
 
@@ -148,18 +167,21 @@ struct Inner {
     config: MemPeerStoreConfig,
     store: HashMap<AgentId, Arc<AgentInfoSigned>>,
     no_prune_until: std::time::Instant,
+    blocks: DynBlocks,
 }
 
 impl Inner {
     pub fn new(
         config: MemPeerStoreConfig,
         now_inst: std::time::Instant,
+        blocks: DynBlocks,
     ) -> Self {
         let no_prune_until = now_inst + config.prune_interval();
         Self {
             config,
             store: HashMap::new(),
             no_prune_until,
+            blocks,
         }
     }
 
@@ -189,12 +211,28 @@ impl Inner {
         self.do_prune(now_inst, Timestamp::now());
     }
 
-    pub fn insert(&mut self, agent_list: Vec<Arc<AgentInfoSigned>>) {
+    pub async fn insert(
+        &mut self,
+        agent_list: Vec<Arc<AgentInfoSigned>>,
+    ) -> K2Result<()> {
         self.check_prune();
 
         let now = Timestamp::now();
 
         for agent in agent_list {
+            // Don't insert blocked agents.
+            if self
+                .blocks
+                .is_blocked(BlockTarget::Agent(agent.agent.clone()))
+                .await?
+            {
+                tracing::debug!(
+                    ?agent,
+                    "Refusing to insert agent as it is currently blocked",
+                );
+                continue;
+            }
+
             // Don't insert expired infos.
             if agent.expires_at < now {
                 tracing::debug!(?agent.agent, ?agent.space, "Ignoring insert for expired agent info");
@@ -215,6 +253,12 @@ impl Inner {
 
             self.store.insert(agent.agent.clone(), agent);
         }
+
+        Ok(())
+    }
+
+    pub fn remove(&mut self, agent_id: &AgentId) {
+        self.store.remove(agent_id);
     }
 
     pub fn get(&mut self, agent: AgentId) -> Option<Arc<AgentInfoSigned>> {
@@ -280,6 +324,16 @@ impl Inner {
         out.into_iter()
             .take(limit)
             .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    pub fn get_by_url(&mut self, peer_url: &Url) -> Vec<Arc<AgentInfoSigned>> {
+        self.check_prune();
+
+        self.store
+            .values()
+            .filter(|agent| agent.url.as_ref() == Some(peer_url))
+            .cloned()
             .collect()
     }
 }

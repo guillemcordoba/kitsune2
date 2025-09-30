@@ -1,3 +1,5 @@
+use crate::factories::MemBlocks;
+
 use super::*;
 use kitsune2_test_utils::agent::*;
 
@@ -8,6 +10,7 @@ fn create() -> Inner {
             prune_interval_s: 10,
         },
         std::time::Instant::now(),
+        Arc::new(MemBlocks::default()),
     )
 }
 
@@ -34,8 +37,8 @@ fn empty_store() {
     assert_eq!(0, s.get_all().len());
 }
 
-#[test]
-fn prune_prunes_only_expired_agents() {
+#[tokio::test]
+async fn prune_prunes_only_expired_agents() {
     let mut s = create();
 
     s.insert(vec![
@@ -51,7 +54,9 @@ fn prune_prunes_only_expired_agents() {
             ..Default::default()
         }
         .build(TestLocalAgent::default()),
-    ]);
+    ])
+    .await
+    .unwrap();
 
     s.do_prune(
         std::time::Instant::now(),
@@ -61,22 +66,24 @@ fn prune_prunes_only_expired_agents() {
     assert_eq!(1, s.get_all().len());
 }
 
-#[test]
-fn happy_get() {
+#[tokio::test]
+async fn happy_get() {
     let mut s = create();
 
     s.insert(vec![AgentBuilder {
         agent: Some(AGENT_1),
         ..Default::default()
     }
-    .build(TestLocalAgent::default())]);
+    .build(TestLocalAgent::default())])
+        .await
+        .unwrap();
 
     let a = s.get(AGENT_1).unwrap();
     assert_eq!(a.agent, AGENT_1);
 }
 
-#[test]
-fn happy_get_all() {
+#[tokio::test]
+async fn happy_get_all() {
     let mut s = create();
 
     s.insert(vec![
@@ -90,7 +97,9 @@ fn happy_get_all() {
             ..Default::default()
         }
         .build(TestLocalAgent::default()),
-    ]);
+    ])
+    .await
+    .unwrap();
 
     let mut a = s
         .get_all()
@@ -101,8 +110,8 @@ fn happy_get_all() {
     assert_eq!(&[AGENT_1, AGENT_2], a.as_slice());
 }
 
-#[test]
-fn fixture_get_by_overlapping_storage_arc() {
+#[tokio::test]
+async fn fixture_get_by_overlapping_storage_arc() {
     const fn u32f(f: f64) -> u32 {
         (u32::MAX as f64 * f) as u32
     }
@@ -143,7 +152,9 @@ fn fixture_get_by_overlapping_storage_arc() {
                 url: Some(Some(sneak_url(arc_name))),
                 ..Default::default()
             }
-            .build(TestLocalAgent::default())]);
+            .build(TestLocalAgent::default())])
+                .await
+                .unwrap();
         }
 
         let mut got = s
@@ -158,8 +169,8 @@ fn fixture_get_by_overlapping_storage_arc() {
     }
 }
 
-#[test]
-fn fixture_get_near_location() {
+#[tokio::test]
+async fn fixture_get_near_location() {
     let mut s = create();
 
     for idx in 0..8 {
@@ -171,7 +182,9 @@ fn fixture_get_near_location() {
             url: Some(Some(sneak_url(&idx.to_string()))),
             ..Default::default()
         }
-        .build(TestLocalAgent::default())]);
+        .build(TestLocalAgent::default())])
+            .await
+            .unwrap();
     }
 
     // these should not be returned because they are invalid.
@@ -197,7 +210,9 @@ fn fixture_get_near_location() {
             ..Default::default()
         }
         .build(TestLocalAgent::default()),
-    ]);
+    ])
+    .await
+    .unwrap();
 
     const F: &[(&[&str], u32)] = &[
         (&["0", "1", "7", "2", "6", "3", "5", "4"], 0),
@@ -213,4 +228,119 @@ fn fixture_get_near_location() {
             .collect::<Vec<_>>();
         assert_eq!(exp, &got.as_slice());
     }
+}
+
+#[tokio::test]
+async fn can_remove_agent_from_store() {
+    let mut mem_store = create();
+
+    mem_store
+        .insert(vec![AgentBuilder {
+            agent: Some(AGENT_1),
+            ..Default::default()
+        }
+        .build(TestLocalAgent::default())])
+        .await
+        .unwrap();
+
+    let agent = mem_store.get(AGENT_1).unwrap();
+    assert_eq!(agent.agent, AGENT_1);
+
+    mem_store.remove(&AGENT_1);
+
+    let agent = mem_store.get(AGENT_1);
+    assert!(agent.is_none());
+}
+
+#[tokio::test]
+async fn try_insert_blocked_agent() {
+    let blocks = Arc::new(MemBlocks::default());
+    let mut mem_store = Inner::new(
+        MemPeerStoreConfig {
+            prune_interval_s: 10,
+        },
+        std::time::Instant::now(),
+        blocks.clone(),
+    );
+
+    blocks.block(BlockTarget::Agent(AGENT_1)).await.unwrap();
+
+    mem_store
+        .insert(vec![AgentBuilder {
+            agent: Some(AGENT_1),
+            ..Default::default()
+        }
+        .build(TestLocalAgent::default())])
+        .await
+        .unwrap();
+
+    let agent = mem_store.get(AGENT_1);
+    assert!(agent.is_none());
+}
+
+#[tokio::test]
+async fn try_insert_multiple_agents_when_one_is_blocked() {
+    let blocks = Arc::new(MemBlocks::default());
+    let mut mem_store = Inner::new(
+        MemPeerStoreConfig {
+            prune_interval_s: 10,
+        },
+        std::time::Instant::now(),
+        blocks.clone(),
+    );
+
+    blocks.block(BlockTarget::Agent(AGENT_1)).await.unwrap();
+
+    mem_store
+        .insert(vec![
+            AgentBuilder {
+                agent: Some(AGENT_1),
+                ..Default::default()
+            }
+            .build(TestLocalAgent::default()),
+            AgentBuilder {
+                agent: Some(AGENT_2),
+                ..Default::default()
+            }
+            .build(TestLocalAgent::default()),
+        ])
+        .await
+        .unwrap();
+
+    let agent_1 = mem_store.get(AGENT_1);
+    assert!(agent_1.is_none());
+
+    let agent_2 = mem_store.get(AGENT_2).unwrap();
+    assert_eq!(agent_2.agent, AGENT_2);
+}
+
+#[tokio::test]
+async fn remove_blocked_agent() {
+    let blocks = Arc::new(MemBlocks::default());
+    let mut mem_store = Inner::new(
+        MemPeerStoreConfig {
+            prune_interval_s: 10,
+        },
+        std::time::Instant::now(),
+        blocks.clone(),
+    );
+
+    mem_store
+        .insert(vec![AgentBuilder {
+            agent: Some(AGENT_1),
+            ..Default::default()
+        }
+        .build(TestLocalAgent::default())])
+        .await
+        .unwrap();
+
+    blocks.block(BlockTarget::Agent(AGENT_1)).await.unwrap();
+
+    let agent_1 = mem_store.get(AGENT_1).unwrap();
+    assert_eq!(agent_1.agent, AGENT_1);
+
+    mem_store.remove(&AGENT_1);
+
+    let agent_1 = mem_store.get(AGENT_1);
+    assert!(agent_1.is_none());
 }

@@ -86,36 +86,43 @@ impl SpaceFactory for CoreSpaceFactory {
         &self,
         builder: Arc<Builder>,
         handler: DynSpaceHandler,
-        space: SpaceId,
+        space_id: SpaceId,
+        report: DynReport,
         tx: DynTransport,
     ) -> BoxFut<'static, K2Result<DynSpace>> {
         Box::pin(async move {
             let config: CoreSpaceModConfig =
                 builder.config.get_module_config()?;
+            let blocks = builder
+                .blocks
+                .create(builder.clone(), space_id.clone())
+                .await?;
             let peer_store = builder
                 .peer_store
-                .create(builder.clone(), space.clone())
+                .create(builder.clone(), space_id.clone(), blocks.clone())
                 .await?;
             let bootstrap = builder
                 .bootstrap
-                .create(builder.clone(), peer_store.clone(), space.clone())
+                .create(builder.clone(), peer_store.clone(), space_id.clone())
                 .await?;
             let local_agent_store =
                 builder.local_agent_store.create(builder.clone()).await?;
+            report.space(space_id.clone(), local_agent_store.clone());
             let inner = Arc::new(RwLock::new(InnerData { current_url: None }));
             let op_store = builder
                 .op_store
-                .create(builder.clone(), space.clone())
+                .create(builder.clone(), space_id.clone())
                 .await?;
             let peer_meta_store = builder
                 .peer_meta_store
-                .create(builder.clone(), space.clone())
+                .create(builder.clone(), space_id.clone())
                 .await?;
             let fetch = builder
                 .fetch
                 .create(
                     builder.clone(),
-                    space.clone(),
+                    space_id.clone(),
+                    report,
                     op_store.clone(),
                     peer_meta_store.clone(),
                     tx.clone(),
@@ -125,7 +132,7 @@ impl SpaceFactory for CoreSpaceFactory {
                 .publish
                 .create(
                     builder.clone(),
-                    space.clone(),
+                    space_id.clone(),
                     fetch.clone(),
                     peer_store.clone(),
                     peer_meta_store.clone(),
@@ -136,7 +143,7 @@ impl SpaceFactory for CoreSpaceFactory {
                 .gossip
                 .create(
                     builder.clone(),
-                    space.clone(),
+                    space_id.clone(),
                     peer_store.clone(),
                     local_agent_store.clone(),
                     peer_meta_store.clone(),
@@ -148,13 +155,13 @@ impl SpaceFactory for CoreSpaceFactory {
 
             let out: DynSpace = Arc::new_cyclic(move |this| {
                 let current_url = tx.register_space_handler(
-                    space.clone(),
+                    space_id.clone(),
                     Arc::new(TxHandlerTranslator(handler, this.clone())),
                 );
                 inner.write().unwrap().current_url = current_url;
                 CoreSpace::new(
                     config.core_space,
-                    space,
+                    space_id,
                     tx,
                     peer_store,
                     bootstrap,
@@ -165,6 +172,7 @@ impl SpaceFactory for CoreSpaceFactory {
                     fetch,
                     publish,
                     gossip,
+                    blocks,
                 )
             });
             Ok(out)
@@ -195,10 +203,10 @@ impl TxSpaceHandler for TxHandlerTranslator {
     fn recv_space_notify(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         data: bytes::Bytes,
     ) -> K2Result<()> {
-        self.0.recv_notify(peer, space, data)
+        self.0.recv_notify(peer, space_id, data)
     }
 
     fn set_unresponsive(
@@ -245,7 +253,7 @@ struct InnerData {
 }
 
 struct CoreSpace {
-    space: SpaceId,
+    space_id: SpaceId,
     tx: DynTransport,
     peer_store: DynPeerStore,
     bootstrap: DynBootstrap,
@@ -255,6 +263,7 @@ struct CoreSpace {
     fetch: DynFetch,
     publish: DynPublish,
     gossip: DynGossip,
+    blocks: DynBlocks,
     inner: Arc<RwLock<InnerData>>,
     task_check_agent_infos: tokio::task::JoinHandle<()>,
 }
@@ -270,7 +279,7 @@ impl Drop for CoreSpace {
 impl std::fmt::Debug for CoreSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CoreSpace")
-            .field("space", &self.space)
+            .field("space", &self.space_id)
             .finish()
     }
 }
@@ -279,7 +288,7 @@ impl CoreSpace {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: CoreSpaceConfig,
-        space: SpaceId,
+        space_id: SpaceId,
         tx: DynTransport,
         peer_store: DynPeerStore,
         bootstrap: DynBootstrap,
@@ -290,6 +299,7 @@ impl CoreSpace {
         fetch: DynFetch,
         publish: DynPublish,
         gossip: DynGossip,
+        blocks: DynBlocks,
     ) -> Self {
         let task_check_agent_infos = tokio::task::spawn(check_agent_infos(
             config,
@@ -297,7 +307,7 @@ impl CoreSpace {
             local_agent_store.clone(),
         ));
         Self {
-            space,
+            space_id,
             tx,
             peer_store,
             bootstrap,
@@ -309,6 +319,7 @@ impl CoreSpace {
             fetch,
             publish,
             gossip,
+            blocks,
         }
     }
 
@@ -355,6 +366,10 @@ impl Space for CoreSpace {
         &self.peer_meta_store
     }
 
+    fn blocks(&self) -> &DynBlocks {
+        &self.blocks
+    }
+
     fn current_url(&self) -> Option<Url> {
         self.inner.read().unwrap().current_url.clone()
     }
@@ -371,7 +386,7 @@ impl Space for CoreSpace {
             self.local_agent_store.add(local_agent.clone()).await?;
 
             let inner = self.inner.clone();
-            let space = self.space.clone();
+            let space_id = self.space_id.clone();
             let local_agent2 = local_agent.clone();
             let peer_store = self.peer_store.clone();
             let local_agent_store = self.local_agent_store.clone();
@@ -379,7 +394,7 @@ impl Space for CoreSpace {
             let bootstrap = self.bootstrap.clone();
             local_agent.register_cb(Arc::new(move || {
                 let inner = inner.clone();
-                let space = space.clone();
+                let space_id = space_id.clone();
                 let local_agent2 = local_agent2.clone();
                 let peer_store = peer_store.clone();
                 let local_agent_store = local_agent_store.clone();
@@ -395,7 +410,7 @@ impl Space for CoreSpace {
                             + std::time::Duration::from_secs(60 * 20);
                         let info = AgentInfo {
                             agent: local_agent2.agent().clone(),
-                            space,
+                            space: space_id,
                             created_at,
                             expires_at,
                             is_tombstone: false,
@@ -463,7 +478,7 @@ impl Space for CoreSpace {
                     created_at + std::time::Duration::from_secs(60 * 20);
                 let info = AgentInfo {
                     agent: local_agent.agent().clone(),
-                    space: self.space.clone(),
+                    space: self.space_id.clone(),
                     created_at,
                     expires_at,
                     is_tombstone: true,
@@ -515,7 +530,8 @@ impl Space for CoreSpace {
         to_peer: Url,
         data: bytes::Bytes,
     ) -> BoxFut<'_, K2Result<()>> {
-        self.tx.send_space_notify(to_peer, self.space.clone(), data)
+        self.tx
+            .send_space_notify(to_peer, self.space_id.clone(), data)
     }
 
     fn inform_ops_stored(

@@ -172,21 +172,18 @@ impl K2Gossip {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::burst::AcceptBurstTracker;
-    use crate::protocol::{
-        encode_agent_ids, ArcSetMessage, GossipMessage,
-        K2GossipInitiateMessage, K2GossipTerminateMessage,
-    };
+    use crate::protocol::K2GossipTerminateMessage;
     use crate::respond::harness::{test_session_id, RespondTestHarness};
-    use crate::state::{GossipRoundState, RoundStage};
+    use crate::state::GossipRoundState;
     use crate::K2GossipConfig;
     use kitsune2_api::{
-        decode_ids, DhtArc, Gossip, LocalAgent, OpId, Timestamp, Url,
-        UNIX_TIMESTAMP,
+        decode_ids, DhtArc, Gossip, LocalAgent, OpId, UNIX_TIMESTAMP,
     };
     use kitsune2_core::factories::MemoryOp;
     use kitsune2_core::Ed25519LocalAgent;
-    use kitsune2_dht::{ArcSet, SECTOR_SIZE};
+    use kitsune2_dht::SECTOR_SIZE;
     use kitsune2_test_utils::enable_tracing;
     use rand::RngCore;
     use std::sync::Arc;
@@ -591,6 +588,104 @@ mod tests {
                 harness.gossip.initiated_round_state.lock().await;
             assert!(initiated_lock.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_tie_break_tie() {
+        enable_tracing();
+
+        let mut harness = RespondTestHarness::create().await;
+
+        let remote_agent = harness.create_agent(DhtArc::Empty).await;
+
+        // Initiate a session with the remote agent
+        let initiated = harness
+            .gossip
+            .initiate_gossip(remote_agent.url.clone().unwrap())
+            .await
+            .unwrap();
+        assert!(initiated);
+
+        // Wait for us to send the initiate message
+        let response = harness.wait_for_sent_response().await;
+        let initiate = match response {
+            GossipMessage::Initiate(initiate) => initiate,
+            other => panic!("Expected initiate message, got: {:?}", other),
+        };
+
+        assert!(initiate.tie_breaker > 0, "Expected tie breaker to be set");
+
+        // Receive an initiate message. It doesn't need to be valid for this test, it just needs to
+        // have the same value for the tie-breaker.
+        let arc_set = ArcSet::new(vec![DhtArc::FULL]).unwrap();
+        harness
+            .gossip
+            .respond_to_msg(
+                remote_agent.url.clone().unwrap(),
+                GossipMessage::Initiate(K2GossipInitiateMessage {
+                    session_id: test_session_id(),
+                    participating_agents: vec![],
+                    arc_set: Some(ArcSetMessage {
+                        value: arc_set.encode(),
+                    }),
+                    // Use the same tie_breaker value to simulate both sides picking the same value.
+                    tie_breaker: initiate.tie_breaker,
+                    new_since: Timestamp::now().as_micros(),
+                    max_op_data_bytes: 5_000,
+                }),
+            )
+            .await
+            .unwrap();
+
+        // Check that we accepted the session in preference to the session we initiated.
+        let response = harness.wait_for_sent_response().await;
+        match response {
+            GossipMessage::Accept(accept) => accept,
+            other => panic!("Expected accept message, got: {:?}", other),
+        };
+
+        // Check that we are now in an accepted state.
+        let accepted_lock = harness.gossip.accepted_round_states.read().await;
+        let accepted = accepted_lock.get(&remote_agent.url.clone().unwrap());
+        assert!(accepted.is_some());
+
+        // Check that we removed our initiated state
+        {
+            let initiated_lock =
+                harness.gossip.initiated_round_state.lock().await;
+            assert!(initiated_lock.is_none());
+        }
+
+        // Now receive an accept message which is unsolicited because we cancelled our request in favour
+        // of the other agent's initiation request.
+        let response = harness
+            .gossip
+            .respond_to_msg(
+                remote_agent.url.clone().unwrap(),
+                GossipMessage::Accept(K2GossipAcceptMessage {
+                    session_id: initiate.session_id,
+                    participating_agents: initiate.participating_agents,
+                    arc_set: initiate.arc_set,
+                    missing_agents: Vec::new(),
+                    new_since: UNIX_TIMESTAMP.as_micros(),
+                    max_op_data_bytes: harness
+                        .gossip
+                        .config
+                        .max_gossip_op_bytes,
+                    new_ops: Vec::new(),
+                    updated_new_since: UNIX_TIMESTAMP.as_micros(),
+                    snapshot: None,
+                }),
+            )
+            .await;
+        assert!(
+            matches!(
+                response,
+                Err(K2GossipError::PeerBehaviorError { ref ctx })
+                    if ctx.as_ref() ==  "Unsolicited Accept message",
+            ),
+            "Expected 'Unsolicited Accept message', got: {response:?}"
+        );
     }
 
     #[tokio::test]

@@ -39,6 +39,10 @@ pub struct Builder {
     /// [Fetch] instances.
     pub fetch: DynFetchFactory,
 
+    /// The [ReportFactory] to be used for creating
+    /// the [Report] instance.
+    pub report: DynReportFactory,
+
     /// The [TransportFactory] to be used for creating
     /// [Transport] instances.
     pub transport: DynTransportFactory,
@@ -62,6 +66,9 @@ pub struct Builder {
     /// The [PublishFactory] to be used for creating [Publish]
     /// instances
     pub publish: DynPublishFactory,
+
+    /// The [`BlocksFactory`] to be used for creating [`Blocks`] instances.
+    pub blocks: DynBlocksFactory,
 }
 
 impl Builder {
@@ -80,12 +87,14 @@ impl Builder {
                 peer_store,
                 bootstrap,
                 fetch,
+                report,
                 transport,
                 op_store,
                 peer_meta_store,
                 gossip,
                 local_agent_store,
                 publish,
+                blocks,
             } = &mut self;
 
             kitsune.default_config(config)?;
@@ -93,12 +102,14 @@ impl Builder {
             peer_store.default_config(config)?;
             bootstrap.default_config(config)?;
             fetch.default_config(config)?;
+            report.default_config(config)?;
             transport.default_config(config)?;
             op_store.default_config(config)?;
             peer_meta_store.default_config(config)?;
             gossip.default_config(config)?;
             local_agent_store.default_config(config)?;
             publish.default_config(config)?;
+            blocks.default_config(config)?;
 
             config.mark_defaults_set();
         }
@@ -113,12 +124,14 @@ impl Builder {
         self.peer_store.validate_config(&self.config)?;
         self.bootstrap.validate_config(&self.config)?;
         self.fetch.validate_config(&self.config)?;
+        self.report.validate_config(&self.config)?;
         self.transport.validate_config(&self.config)?;
         self.op_store.validate_config(&self.config)?;
         self.peer_meta_store.validate_config(&self.config)?;
         self.gossip.validate_config(&self.config)?;
         self.local_agent_store.validate_config(&self.config)?;
         self.publish.validate_config(&self.config)?;
+        self.blocks.validate_config(&self.config)?;
 
         self.config.mark_validated();
 

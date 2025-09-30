@@ -343,7 +343,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn happy_encode_decode() {
         let agent: AgentId = bytes::Bytes::from_static(b"test-agent").into();
-        let space: SpaceId = bytes::Bytes::from_static(b"test-space").into();
+        let space_id: SpaceId = bytes::Bytes::from_static(b"test-space").into();
         let now = Timestamp::from_micros(1731690797907204);
         let later = Timestamp::from_micros(now.as_micros() + 72_000_000_000);
         let url = Some(Url::from_str("ws://test.com:80/test-url").unwrap());
@@ -353,7 +353,7 @@ mod test {
             &TestCrypto,
             AgentInfo {
                 agent: agent.clone(),
-                space: space.clone(),
+                space: space_id.clone(),
                 created_at: now,
                 expires_at: later,
                 is_tombstone: false,
@@ -373,7 +373,7 @@ mod test {
 
         let dec = AgentInfoSigned::decode(&TestCrypto, enc.as_bytes()).unwrap();
         assert_eq!(agent, dec.agent);
-        assert_eq!(space, dec.space);
+        assert_eq!(space_id, dec.space);
         assert_eq!(now, dec.created_at);
         assert_eq!(later, dec.expires_at);
         assert!(!dec.is_tombstone);

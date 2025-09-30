@@ -88,6 +88,16 @@ pub mod config {
         /// The maximum ephemeral udp port to bind.
         #[cfg_attr(feature = "schema", schemars(default))]
         pub ephemeral_udp_port_max: Option<u16>,
+
+        /// Forces the network transport to use a relayed connection instead of WebRTC.
+        ///
+        /// This is only intended for testing and is expected to degrade the performance of the
+        /// network transport. It is useful for the developers of a Kitsune2 host application to be
+        /// able to verify that their application runs correctly without direct connections. It is
+        /// never desirable in production to force the use of a rate-limited, relayed connection
+        /// where a direct WebRTC connection is possible.
+        #[cfg_attr(feature = "schema", schemars(default))]
+        pub danger_force_signal_relay: bool,
     }
 
     impl Default for Tx5TransportConfig {
@@ -103,6 +113,7 @@ pub mod config {
                 tracing_enabled: false,
                 ephemeral_udp_port_min: None,
                 ephemeral_udp_port_max: None,
+                danger_force_signal_relay: false,
             }
         }
     }
@@ -234,6 +245,7 @@ impl Tx5Transport {
                             peer_url.map_err(std::io::Error::other)?;
                         let data = handler
                             .peer_connect(peer_url)
+                            .await
                             .map_err(std::io::Error::other)?;
                         Ok(data.to_vec())
                     })
@@ -268,6 +280,8 @@ impl Tx5Transport {
         if let Some(auth_material) = auth_material {
             tx5_config = tx5_config.with_signal_auth_material(auth_material);
         }
+
+        tx5_config.danger_force_signal_relay = config.danger_force_signal_relay;
 
         let tx5_config = Arc::new(tx5_config);
 
@@ -384,19 +398,21 @@ fn handle_msg(
     handler: &TxImpHnd,
     peer_url: tx5::PeerUrl,
     message: Vec<u8>,
-) -> K2Result<()> {
-    let peer_url = match peer_url.to_kitsune() {
-        Ok(peer_url) => peer_url,
-        Err(err) => {
-            return Err(K2Error::other_src("malformed peer url", err));
+) -> BoxFut<'_, K2Result<()>> {
+    Box::pin(async move {
+        let peer_url = match peer_url.to_kitsune() {
+            Ok(peer_url) => peer_url,
+            Err(err) => {
+                return Err(K2Error::other_src("malformed peer url", err));
+            }
+        };
+        // this would be more efficient if we retool tx5 to use bytes internally
+        let message = bytes::BytesMut::from(message.as_slice()).freeze();
+        if let Err(err) = handler.recv_data(peer_url, message).await {
+            return Err(K2Error::other_src("error in recv data handler", err));
         }
-    };
-    // this would be more efficient if we retool tx5 to use bytes internally
-    let message = bytes::BytesMut::from(message.as_slice()).freeze();
-    if let Err(err) = handler.recv_data(peer_url, message) {
-        return Err(K2Error::other_src("error in recv data handler", err));
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 struct TaskDrop(&'static str);
@@ -412,6 +428,7 @@ async fn pre_task(handler: Arc<TxImpHnd>, mut pre_recv: PreCheckRecv) {
     while let Some((peer_url, message, resp)) = pre_recv.recv().await {
         let _ = resp.send(
             handle_msg(&handler, peer_url, message)
+                .await
                 .map_err(std::io::Error::other),
         );
     }
@@ -455,7 +472,7 @@ async fn evt_task(
             }
             Message { peer_url, message } => {
                 if let Err(err) =
-                    handle_msg(&handler, peer_url.clone(), message)
+                    handle_msg(&handler, peer_url.clone(), message).await
                 {
                     ep.close(&peer_url);
                     tracing::debug!(?err);

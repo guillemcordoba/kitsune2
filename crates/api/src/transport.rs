@@ -55,23 +55,29 @@ impl TxImpHnd {
     /// On success, this function returns bytes that should be
     /// sent as a preflight message for additional connection validation.
     /// (The preflight data should be sent even if it is zero length).
-    pub fn peer_connect(&self, peer: Url) -> K2Result<bytes::Bytes> {
-        for mod_handler in self.mod_map.lock().unwrap().values() {
-            mod_handler.peer_connect(peer.clone())?;
-        }
-        for space_handler in self.space_map.lock().unwrap().values() {
-            space_handler.peer_connect(peer.clone())?;
-        }
-        self.handler.peer_connect(peer.clone())?;
-        let preflight = self.handler.preflight_gather_outgoing(peer)?;
-        let enc = (K2Proto {
-            ty: K2WireType::Preflight as i32,
-            data: preflight,
-            space: None,
-            module: None,
+    pub fn peer_connect(
+        &self,
+        peer: Url,
+    ) -> BoxFut<'_, K2Result<bytes::Bytes>> {
+        Box::pin(async {
+            for mod_handler in self.mod_map.lock().unwrap().values() {
+                mod_handler.peer_connect(peer.clone())?;
+            }
+            for space_handler in self.space_map.lock().unwrap().values() {
+                space_handler.peer_connect(peer.clone())?;
+            }
+            self.handler.peer_connect(peer.clone())?;
+            let preflight =
+                self.handler.preflight_gather_outgoing(peer).await?;
+            let enc = (K2Proto {
+                ty: K2WireType::Preflight as i32,
+                data: preflight,
+                space_id: None,
+                module_id: None,
+            })
+            .encode()?;
+            Ok(enc)
         })
-        .encode()?;
-        Ok(enc)
     }
 
     /// Call this whenever a connection is closed.
@@ -86,52 +92,61 @@ impl TxImpHnd {
     }
 
     /// Call this whenever data is received on an open connection.
-    pub fn recv_data(&self, peer: Url, data: bytes::Bytes) -> K2Result<()> {
-        let data = K2Proto::decode(&data)?;
-        let ty = data.ty();
-        let K2Proto {
-            space,
-            module,
-            data,
-            ..
-        } = data;
+    pub fn recv_data(
+        &self,
+        peer: Url,
+        data: bytes::Bytes,
+    ) -> BoxFut<'_, K2Result<()>> {
+        Box::pin(async move {
+            let data = K2Proto::decode(&data)?;
+            let ty = data.ty();
+            let K2Proto {
+                space_id,
+                module_id,
+                data,
+                ..
+            } = data;
 
-        match ty {
-            K2WireType::Unspecified => Ok(()),
-            K2WireType::Preflight => {
-                self.handler.preflight_validate_incoming(peer, data)
-            }
-            K2WireType::Notify => {
-                if let Some(space) = space {
-                    let space = SpaceId::from(space);
-                    if let Some(h) = self.space_map.lock().unwrap().get(&space)
-                    {
-                        h.recv_space_notify(peer, space, data)?;
-                    }
+            match ty {
+                K2WireType::Unspecified => Ok(()),
+                K2WireType::Preflight => {
+                    self.handler.preflight_validate_incoming(peer, data).await
                 }
-                Ok(())
-            }
-            K2WireType::Module => {
-                if let (Some(space), Some(module)) = (space, module) {
-                    let space = SpaceId::from(space);
-                    if let Some(h) = self
-                        .mod_map
-                        .lock()
-                        .unwrap()
-                        .get(&(space.clone(), module.clone()))
+                K2WireType::Notify => {
+                    if let Some(space_id) = space_id {
+                        let space_id = SpaceId::from(space_id);
+                        if let Some(h) =
+                            self.space_map.lock().unwrap().get(&space_id)
+                        {
+                            h.recv_space_notify(peer, space_id, data)?;
+                        }
+                    }
+                    Ok(())
+                }
+                K2WireType::Module => {
+                    if let (Some(space_id), Some(module)) =
+                        (space_id, module_id)
                     {
-                        h.recv_module_msg(peer, space, module.clone(), data).inspect_err(|e| {
+                        let space_id = SpaceId::from(space_id);
+                        if let Some(h) = self
+                            .mod_map
+                            .lock()
+                            .unwrap()
+                            .get(&(space_id.clone(), module.clone()))
+                        {
+                            h.recv_module_msg(peer, space_id, module.clone(), data).inspect_err(|e| {
                             tracing::warn!(?module, "Error in recv_module_msg, peer connection will be closed: {e}");
                         })?;
+                        }
                     }
+                    Ok(())
                 }
-                Ok(())
+                K2WireType::Disconnect => {
+                    let reason = String::from_utf8_lossy(&data).to_string();
+                    Err(K2Error::other(format!("Remote Disconnect: {reason}")))
+                }
             }
-            K2WireType::Disconnect => {
-                let reason = String::from_utf8_lossy(&data).to_string();
-                Err(K2Error::other(format!("Remote Disconnect: {reason}")))
-            }
-        }
+        })
     }
 
     /// Call this whenever a connection to a peer fails to get established,
@@ -203,17 +218,17 @@ pub trait Transport: 'static + Send + Sync + std::fmt::Debug {
     /// Returns the current url if any.
     fn register_space_handler(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
         handler: DynTxSpaceHandler,
     ) -> Option<Url>;
 
     /// Register a module handler for receiving incoming module messages.
     ///
     /// Panics if you attempt to register a duplicate handler for the
-    /// same (space, module).
+    /// same (space_id, module).
     fn register_module_handler(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
         module: String,
         handler: DynTxModuleHandler,
     );
@@ -231,7 +246,7 @@ pub trait Transport: 'static + Send + Sync + std::fmt::Debug {
     fn send_space_notify(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         data: bytes::Bytes,
     ) -> BoxFut<'_, K2Result<()>>;
 
@@ -243,7 +258,7 @@ pub trait Transport: 'static + Send + Sync + std::fmt::Debug {
     fn send_module(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         module: String,
         data: bytes::Bytes,
     ) -> BoxFut<'_, K2Result<()>>;
@@ -252,7 +267,7 @@ pub trait Transport: 'static + Send + Sync + std::fmt::Debug {
     fn get_connected_peers(&self) -> BoxFut<'_, K2Result<Vec<Url>>>;
 
     /// Unregister a space handler and all module handlers for that space.
-    fn unregister_space(&self, space: SpaceId) -> BoxFut<'_, ()>;
+    fn unregister_space(&self, space_id: SpaceId) -> BoxFut<'_, ()>;
 
     /// Dump network stats.
     fn dump_network_stats(&self) -> BoxFut<'_, K2Result<TransportStats>>;
@@ -297,12 +312,12 @@ impl DefaultTransport {
 impl Transport for DefaultTransport {
     fn register_space_handler(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
         handler: DynTxSpaceHandler,
     ) -> Option<Url> {
         let mut lock = self.space_map.lock().unwrap();
-        if lock.insert(space.clone(), handler).is_some() {
-            panic!("Attempted to register duplicate space handler! {space}");
+        if lock.insert(space_id.clone(), handler).is_some() {
+            panic!("Attempted to register duplicate space handler! {space_id}");
         }
         // keep the lock locked while we fetch the url for atomicity.
         self.imp.url()
@@ -310,7 +325,7 @@ impl Transport for DefaultTransport {
 
     fn register_module_handler(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
         module: String,
         handler: DynTxModuleHandler,
     ) {
@@ -318,11 +333,11 @@ impl Transport for DefaultTransport {
             .mod_map
             .lock()
             .unwrap()
-            .insert((space.clone(), module.clone()), handler)
+            .insert((space_id.clone(), module.clone()), handler)
             .is_some()
         {
             panic!(
-                "Attempted to register duplicate module handler! {space} {module}"
+                "Attempted to register duplicate module handler! {space_id} {module}"
             );
         }
     }
@@ -334,8 +349,8 @@ impl Transport for DefaultTransport {
                 Some(reason) => match (K2Proto {
                     ty: K2WireType::Disconnect as i32,
                     data: bytes::Bytes::copy_from_slice(reason.as_bytes()),
-                    space: None,
-                    module: None,
+                    space_id: None,
+                    module_id: None,
                 })
                 .encode()
                 {
@@ -351,15 +366,15 @@ impl Transport for DefaultTransport {
     fn send_space_notify(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         data: bytes::Bytes,
     ) -> BoxFut<'_, K2Result<()>> {
         Box::pin(async move {
             let enc = (K2Proto {
                 ty: K2WireType::Notify as i32,
                 data,
-                space: Some(space.into()),
-                module: None,
+                space_id: Some(space_id.into()),
+                module_id: None,
             })
             .encode()?;
             self.imp.send(peer, enc).await
@@ -369,7 +384,7 @@ impl Transport for DefaultTransport {
     fn send_module(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         module: String,
         data: bytes::Bytes,
     ) -> BoxFut<'_, K2Result<()>> {
@@ -377,8 +392,8 @@ impl Transport for DefaultTransport {
             let enc = (K2Proto {
                 ty: K2WireType::Module as i32,
                 data,
-                space: Some(space.into()),
-                module: Some(module),
+                space_id: Some(space_id.into()),
+                module_id: Some(module),
             })
             .encode()?;
             self.imp.send(peer, enc).await
@@ -389,14 +404,17 @@ impl Transport for DefaultTransport {
         self.imp.get_connected_peers()
     }
 
-    fn unregister_space(&self, space: SpaceId) -> BoxFut<'_, ()> {
+    fn unregister_space(&self, space_id: SpaceId) -> BoxFut<'_, ()> {
         Box::pin(async move {
             // Remove the space handler.
-            self.space_map.lock().unwrap().remove(&space);
+            self.space_map.lock().unwrap().remove(&space_id);
 
             // Remove all module handlers for this space.
             // Done by keeping all module handlers that are not for this space.
-            self.mod_map.lock().unwrap().retain(|(s, _), _| s != &space);
+            self.mod_map
+                .lock()
+                .unwrap()
+                .retain(|(s, _), _| s != &space_id);
         })
     }
 
@@ -439,9 +457,9 @@ pub trait TxHandler: TxBaseHandler {
     fn preflight_gather_outgoing(
         &self,
         peer_url: Url,
-    ) -> K2Result<bytes::Bytes> {
+    ) -> BoxFut<'_, K2Result<bytes::Bytes>> {
         drop(peer_url);
-        Ok(bytes::Bytes::new())
+        Box::pin(async { Ok(bytes::Bytes::new()) })
     }
 
     /// Validate preflight data sent by a remote peer on a new connection.
@@ -453,9 +471,9 @@ pub trait TxHandler: TxBaseHandler {
         &self,
         peer_url: Url,
         data: bytes::Bytes,
-    ) -> K2Result<()> {
+    ) -> BoxFut<'_, K2Result<()>> {
         drop((peer_url, data));
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -470,10 +488,10 @@ pub trait TxSpaceHandler: TxBaseHandler {
     fn recv_space_notify(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         data: bytes::Bytes,
     ) -> K2Result<()> {
-        drop((peer, space, data));
+        drop((peer, space_id, data));
         Ok(())
     }
 
@@ -499,11 +517,11 @@ pub trait TxModuleHandler: TxBaseHandler {
     fn recv_module_msg(
         &self,
         peer: Url,
-        space: SpaceId,
+        space_id: SpaceId,
         module: String,
         data: bytes::Bytes,
     ) -> K2Result<()> {
-        drop((peer, space, module, data));
+        drop((peer, space_id, module, data));
         Ok(())
     }
 }

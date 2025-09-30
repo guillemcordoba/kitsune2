@@ -39,11 +39,17 @@ async fn setup_test() -> TestCase {
         .unwrap();
     let responses_sent = Arc::new(Mutex::new(Vec::new()));
     let mock_transport = make_mock_transport(responses_sent.clone());
+    let report = builder
+        .report
+        .create(builder.clone(), mock_transport.clone())
+        .await
+        .unwrap();
     let config = CoreFetchConfig::default();
 
     let fetch = CoreFetch::new(
         config.clone(),
         TEST_SPACE_ID,
+        report,
         op_store.clone(),
         peer_meta_store,
         mock_transport.clone(),
@@ -66,9 +72,9 @@ fn make_mock_transport(
         .returning(|_, _, _| {});
     mock_transport.expect_send_module().returning({
         let responses_sent = responses_sent.clone();
-        move |peer, space, module, data| {
-            assert_eq!(space, TEST_SPACE_ID);
-            assert_eq!(module, crate::factories::core_fetch::MOD_NAME);
+        move |peer, space_id, module_id, data| {
+            assert_eq!(space_id, TEST_SPACE_ID);
+            assert_eq!(module_id, crate::factories::core_fetch::MOD_NAME);
             let fetch_message = K2FetchMessage::decode(data).unwrap();
             let response = match fetch_message.fetch_message_type() {
                 FetchMessageType::Response => {
@@ -205,17 +211,17 @@ async fn fail_to_respond_once_then_succeed() {
         .expect_register_module_handler()
         .returning(|_, _, _| ());
     mock_transport.expect_send_module().once().returning({
-        move |_peer, space, module, _data| {
-            assert_eq!(space, TEST_SPACE_ID);
-            assert_eq!(module, crate::factories::core_fetch::MOD_NAME);
+        move |_peer, space_id, module_id, _data| {
+            assert_eq!(space_id, TEST_SPACE_ID);
+            assert_eq!(module_id, crate::factories::core_fetch::MOD_NAME);
             Box::pin(async move { Err(K2Error::other("could not send ops")) })
         }
     });
     mock_transport.expect_send_module().once().returning({
         let responses_sent = responses_sent.clone();
-        move |peer, space, module, data| {
-            assert_eq!(space, TEST_SPACE_ID);
-            assert_eq!(module, crate::factories::core_fetch::MOD_NAME);
+        move |peer, space_id, module_id, data| {
+            assert_eq!(space_id, TEST_SPACE_ID);
+            assert_eq!(module_id, crate::factories::core_fetch::MOD_NAME);
             let response = FetchResponse::decode(
                 K2FetchMessage::decode(data).unwrap().data,
             )
@@ -227,6 +233,11 @@ async fn fail_to_respond_once_then_succeed() {
         }
     });
     let mock_transport = Arc::new(mock_transport);
+    let report = builder
+        .report
+        .create(builder.clone(), mock_transport.clone())
+        .await
+        .unwrap();
     let config = CoreFetchConfig::default();
 
     let op = make_op(vec![1; 128]);
@@ -239,6 +250,7 @@ async fn fail_to_respond_once_then_succeed() {
     let fetch = CoreFetch::new(
         config.clone(),
         TEST_SPACE_ID,
+        report,
         op_store,
         peer_meta_store,
         mock_transport.clone(),

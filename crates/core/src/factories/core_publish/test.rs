@@ -148,7 +148,7 @@ async fn published_agent_can_be_retrieved() {
     } = Test::setup().await;
 
     let agent_id: AgentId = bytes::Bytes::from_static(b"test-agent").into();
-    let space: SpaceId = bytes::Bytes::from_static(b"test-space").into();
+    let space_id: SpaceId = bytes::Bytes::from_static(b"test-space").into();
     let now = Timestamp::now();
     let later = Timestamp::from_micros(now.as_micros() + 72_000_000_000);
     let url = Some(url_2.clone());
@@ -158,7 +158,7 @@ async fn published_agent_can_be_retrieved() {
         &TestLocalAgent::default(),
         AgentInfo {
             agent: agent_id.clone(),
-            space: space.clone(),
+            space: space_id.clone(),
             created_at: now,
             expires_at: later,
             is_tombstone: false,
@@ -207,7 +207,7 @@ async fn invalid_agent_is_not_inserted_into_peer_store_and_subsequent_publishes_
         bytes::Bytes::from_static(b"test-agent").into();
     let agent_id_valid: AgentId =
         bytes::Bytes::from_static(b"test-agent-2").into();
-    let space: SpaceId = bytes::Bytes::from_static(b"test-space").into();
+    let space_id: SpaceId = bytes::Bytes::from_static(b"test-space").into();
     let now = Timestamp::now();
     let later = Timestamp::from_micros(now.as_micros() + 72_000_000_000);
     let url = Some(url_2.clone());
@@ -217,7 +217,7 @@ async fn invalid_agent_is_not_inserted_into_peer_store_and_subsequent_publishes_
         &InvalidSigner,
         AgentInfo {
             agent: agent_id_invalid.clone(),
-            space: space.clone(),
+            space: space_id.clone(),
             created_at: now,
             expires_at: later,
             is_tombstone: false,
@@ -243,7 +243,7 @@ async fn invalid_agent_is_not_inserted_into_peer_store_and_subsequent_publishes_
         &TestLocalAgent::default(),
         AgentInfo {
             agent: agent_id_valid.clone(),
-            space: space.clone(),
+            space: space_id.clone(),
             created_at: now,
             expires_at: later,
             is_tombstone: false,
@@ -371,6 +371,11 @@ async fn create_publish(
     builder: Arc<Builder>,
     transport: DynTransport,
 ) -> (CorePublish, DynOpStore, DynPeerStore, DynPeerMetaStore) {
+    let report = builder
+        .report
+        .create(builder.clone(), transport.clone())
+        .await
+        .unwrap();
     let op_store = builder
         .op_store
         .create(builder.clone(), TEST_SPACE_ID)
@@ -386,15 +391,21 @@ async fn create_publish(
         .create(
             builder.clone(),
             TEST_SPACE_ID,
+            report,
             op_store.clone(),
             peer_meta_store.clone(),
             transport.clone(),
         )
         .await
         .unwrap();
+    let blocks = builder
+        .blocks
+        .create(builder.clone(), TEST_SPACE_ID)
+        .await
+        .unwrap();
     let peer_store = builder
         .peer_store
-        .create(builder.clone(), TEST_SPACE_ID)
+        .create(builder.clone(), TEST_SPACE_ID, blocks)
         .await
         .unwrap();
     let publish = CorePublish::new(

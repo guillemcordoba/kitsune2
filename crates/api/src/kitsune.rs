@@ -25,9 +25,9 @@ pub trait KitsuneHandler: 'static + Send + Sync + std::fmt::Debug {
     fn preflight_gather_outgoing(
         &self,
         peer_url: Url,
-    ) -> K2Result<bytes::Bytes> {
+    ) -> BoxFut<'_, K2Result<bytes::Bytes>> {
         drop(peer_url);
-        Ok(bytes::Bytes::new())
+        Box::pin(async { Ok(bytes::Bytes::new()) })
     }
 
     /// Validate preflight data sent by a remote peer on a new connection.
@@ -39,16 +39,16 @@ pub trait KitsuneHandler: 'static + Send + Sync + std::fmt::Debug {
         &self,
         peer_url: Url,
         data: bytes::Bytes,
-    ) -> K2Result<()> {
+    ) -> BoxFut<'_, K2Result<()>> {
         drop(peer_url);
         drop(data);
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
 
     /// Kitsune would like to construct a space. Provide a handler.
     fn create_space(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
     ) -> BoxFut<'_, K2Result<space::DynSpaceHandler>>;
 }
 
@@ -76,22 +76,26 @@ pub trait Kitsune: 'static + Send + Sync + std::fmt::Debug {
 
     /// Get an existing space with the provided [SpaceId] or create
     /// a new one.
-    fn space(&self, space: SpaceId) -> BoxFut<'_, K2Result<space::DynSpace>>;
+    fn space(&self, space_id: SpaceId)
+        -> BoxFut<'_, K2Result<space::DynSpace>>;
 
     /// Get a space, only if it exists.
     fn space_if_exists(
         &self,
-        space: SpaceId,
+        space_id: SpaceId,
     ) -> BoxFut<'_, Option<space::DynSpace>>;
 
     /// Remove a space, if it exists.
     ///
     /// This will remove the space from the list of active spaces. The space will only shutdown
     /// cleanly if all modules are careful about not holding references to the space and transport.
-    fn remove_space(&self, space: SpaceId) -> BoxFut<'_, K2Result<()>>;
+    fn remove_space(&self, space_id: SpaceId) -> BoxFut<'_, K2Result<()>>;
 
     /// Get the transport handle.
     fn transport(&self) -> BoxFut<'_, K2Result<DynTransport>>;
+
+    /// Get the report handle.
+    fn report(&self) -> K2Result<DynReport>;
 }
 
 /// Trait-object [Kitsune].

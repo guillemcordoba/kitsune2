@@ -44,9 +44,9 @@ impl RespondTestHarness {
         let (tx, rx) = tokio::sync::mpsc::channel(100);
         let mut transport = MockTransport::new();
         transport.expect_send_module().returning(
-            move |peer, space, module, data| {
-                assert_eq!(space, TEST_SPACE_ID);
-                assert_eq!(module.as_str(), MOD_NAME);
+            move |peer, space_id, module_id, data| {
+                assert_eq!(space_id, TEST_SPACE_ID);
+                assert_eq!(module_id.as_str(), MOD_NAME);
 
                 let tx = tx.clone();
                 Box::pin(async move {
@@ -64,6 +64,11 @@ impl RespondTestHarness {
             .create(builder.clone(), TEST_SPACE_ID)
             .await
             .unwrap();
+        let blocks = builder
+            .blocks
+            .create(builder.clone(), TEST_SPACE_ID)
+            .await
+            .unwrap();
 
         let config = Arc::new(config);
         Self {
@@ -75,7 +80,7 @@ impl RespondTestHarness {
                 space_id: TEST_SPACE_ID,
                 peer_store: builder
                     .peer_store
-                    .create(builder.clone(), TEST_SPACE_ID)
+                    .create(builder.clone(), TEST_SPACE_ID, blocks)
                     .await
                     .unwrap(),
                 local_agent_store: builder
@@ -92,6 +97,11 @@ impl RespondTestHarness {
                     .create(
                         builder.clone(),
                         TEST_SPACE_ID,
+                        builder
+                            .report
+                            .create(builder.clone(), transport.clone())
+                            .await
+                            .unwrap(),
                         op_store.clone(),
                         peer_meta_store.clone(),
                         transport.clone(),

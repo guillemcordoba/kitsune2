@@ -1,5 +1,7 @@
 use kitsune2_api::*;
-use kitsune2_test_utils::{agent::*, iter_check, space::TEST_SPACE_ID};
+use kitsune2_test_utils::{
+    agent::*, enable_tracing, iter_check, space::TEST_SPACE_ID,
+};
 use std::sync::{Arc, Mutex};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -15,7 +17,7 @@ async fn space_local_agent_join_leave() {
     impl KitsuneHandler for K {
         fn create_space(
             &self,
-            _space: SpaceId,
+            _space_id: SpaceId,
         ) -> BoxFut<'_, K2Result<DynSpaceHandler>> {
             Box::pin(async move {
                 let s: DynSpaceHandler = Arc::new(S);
@@ -93,6 +95,8 @@ async fn space_local_agent_join_leave() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn space_notify_send_recv() {
+    enable_tracing();
+
     type Item = (Url, SpaceId, bytes::Bytes);
     type Recv = Arc<Mutex<Vec<Item>>>;
     let recv = Arc::new(Mutex::new(Vec::new()));
@@ -104,10 +108,10 @@ async fn space_notify_send_recv() {
         fn recv_notify(
             &self,
             from_peer: Url,
-            space: SpaceId,
+            space_id: SpaceId,
             data: bytes::Bytes,
         ) -> K2Result<()> {
-            self.0.lock().unwrap().push((from_peer, space, data));
+            self.0.lock().unwrap().push((from_peer, space_id, data));
             Ok(())
         }
     }
@@ -125,7 +129,7 @@ async fn space_notify_send_recv() {
 
         fn create_space(
             &self,
-            _space: SpaceId,
+            _space_id: SpaceId,
         ) -> BoxFut<'_, K2Result<DynSpaceHandler>> {
             Box::pin(async move {
                 let s: DynSpaceHandler = Arc::new(S(self.0.clone()));
@@ -228,7 +232,7 @@ async fn space_local_agent_periodic_re_sign_and_bootstrap() {
             &self,
             _builder: Arc<Builder>,
             _peer_store: DynPeerStore,
-            _space: SpaceId,
+            _space_id: SpaceId,
         ) -> BoxFut<'static, K2Result<DynBootstrap>> {
             let out: DynBootstrap = self.0.clone();
             Box::pin(async move { Ok(out) })
@@ -246,7 +250,7 @@ async fn space_local_agent_periodic_re_sign_and_bootstrap() {
     impl KitsuneHandler for K {
         fn create_space(
             &self,
-            _space: SpaceId,
+            _space_id: SpaceId,
         ) -> BoxFut<'_, K2Result<DynSpaceHandler>> {
             Box::pin(async move {
                 let s: DynSpaceHandler = Arc::new(S);
@@ -310,7 +314,7 @@ async fn broadcast_new_agent_info_on_resign() {
     impl KitsuneHandler for K {
         fn create_space(
             &self,
-            _space: SpaceId,
+            _space_id: SpaceId,
         ) -> BoxFut<'_, K2Result<DynSpaceHandler>> {
             Box::pin(async move {
                 let s: DynSpaceHandler = Arc::new(S);

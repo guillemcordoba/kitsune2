@@ -41,6 +41,9 @@ pub use agent::*;
 mod arc;
 pub use arc::*;
 
+mod blocks;
+pub use blocks::*;
+
 mod bootstrap;
 pub use bootstrap::*;
 
@@ -73,6 +76,9 @@ pub use timestamp::*;
 
 mod fetch;
 pub use fetch::*;
+
+mod report;
+pub use report::*;
 
 mod peer_meta_store;
 pub use peer_meta_store::*;

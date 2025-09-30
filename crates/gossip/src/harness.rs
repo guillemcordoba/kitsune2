@@ -386,12 +386,12 @@ pub struct K2GossipFunctionalTestFactory {
 impl K2GossipFunctionalTestFactory {
     /// Create a new functional test factory.
     pub async fn create(
-        space: SpaceId,
+        space_id: SpaceId,
         bootstrap: bool,
         config: Option<K2GossipConfig>,
     ) -> K2GossipFunctionalTestFactory {
         K2GossipFunctionalTestFactory {
-            space_id: space,
+            space_id,
             bootstrap,
             config: K2GossipModConfig {
                 k2_gossip: if let Some(config) = config {
@@ -444,12 +444,19 @@ impl K2GossipFunctionalTestFactory {
             .await
             .unwrap();
 
+        let report = builder
+            .report
+            .create(builder.clone(), transport.clone())
+            .await
+            .unwrap();
+
         let space = builder
             .space
             .create(
                 builder.clone(),
                 Arc::new(NoopHandler),
                 self.space_id.clone(),
+                report,
                 transport.clone(),
             )
             .await

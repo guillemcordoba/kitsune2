@@ -780,7 +780,7 @@ fn setup_incoming_listener(
 
             tracing::debug!("Incoming accept_uni received for {peer}.");
 
-            let Ok(()) = handler.recv_data(peer.clone(), data.into()) else {
+            let Ok(()) = handler.recv_data(peer.clone(), data.into()).await else {
                 tracing::error!("recv_data error");
                 return;
             };

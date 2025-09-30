@@ -28,6 +28,7 @@ use kitsune2_transport_iroh::IrohTransportFactory;
 /// - `peer_store` - The default peer store is [factories::MemPeerStoreFactory].
 /// - `bootstrap` - The default bootstrap is [factories::CoreBootstrapFactory].
 /// - `fetch` - The default fetch module is [factories::CoreFetchFactory].
+/// - `report` - The default report module is [factories::CoreReportFactory].
 /// - `transport` - The default transport is [Tx5TransportFactory].
 /// - `op_store` - The default op store is [MemOpStoreFactory].
 ///                Note: you will likely want to implement your own op store.
@@ -36,6 +37,8 @@ use kitsune2_transport_iroh::IrohTransportFactory;
 /// - `gossip` - The default gossip module is [K2GossipFactory].
 /// - `local_agent_store` - The default local agent store is [factories::CoreLocalAgentStoreFactory].
 /// - `publish` - The default publish module is [factories::CorePublishFactory].
+/// - `blocks` - The default blocks module is [factories::MemBlocksFactory].
+///              Note: you will likely want to implement your own [`Blocks`] module.
 pub fn default_builder() -> Builder {
     Builder {
         config: Config::default(),
@@ -46,11 +49,13 @@ pub fn default_builder() -> Builder {
         peer_store: factories::MemPeerStoreFactory::create(),
         bootstrap: factories::CoreBootstrapFactory::create(),
         fetch: factories::CoreFetchFactory::create(),
+        report: factories::CoreReportFactory::create(),
         transport: IrohTransportFactory::create(),
         op_store: MemOpStoreFactory::create(),
         peer_meta_store: factories::MemPeerMetaStoreFactory::create(),
         gossip: K2GossipFactory::create(),
         local_agent_store: factories::CoreLocalAgentStoreFactory::create(),
         publish: factories::CorePublishFactory::create(),
+        blocks: factories::MemBlocksFactory::create(),
     }
 }
